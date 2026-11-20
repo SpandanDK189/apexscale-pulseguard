@@ -20,7 +20,13 @@ import {
   TrendingDown,
   Cloud,
   ShoppingBag,
-  Building2
+  Building2,
+  HelpCircle,
+  X,
+  ChevronRight,
+  ChevronLeft,
+  Sparkles,
+  Info
 } from 'lucide-react';
 
 export default function App() {
@@ -33,6 +39,28 @@ export default function App() {
   // Dynamic Traffic & Wave Generation
   const [currentRps, setCurrentRps] = useState(5);
   const [trafficPattern, setTrafficPattern] = useState('IDLE'); // 'STEADY_BASELINE', 'GRADUAL_UP', 'SUDDEN_SPIKE', 'SUDDEN_DROP', 'COOLDOWN'
+
+  // Interactive Guided Tour State
+  const [tourStep, setTourStep] = useState(0); // 0 = closed, 1..5 = active steps
+  const [showCompletionDebrief, setShowCompletionDebrief] = useState(false);
+
+  // Check localStorage for first-time visitors
+  useEffect(() => {
+    const hasSeenTour = localStorage.getItem('pulseguard_tour_seen');
+    if (!hasSeenTour) {
+      setTourStep(1); // Start tour automatically on first visit
+    }
+  }, []);
+
+  const closeTour = () => {
+    setTourStep(0);
+    localStorage.setItem('pulseguard_tour_seen', 'true');
+  };
+
+  const restartTour = () => {
+    setTourStep(1);
+    setShowCompletionDebrief(false);
+  };
 
   // =========================================================================
   // Granular Financial Model Parameters:
@@ -137,6 +165,7 @@ export default function App() {
 
           if (nextSec >= totalSec) {
             setIsRunning(false);
+            setShowCompletionDebrief(true); // Automatically show debrief after test run completes!
           }
 
           // Advance Pattern Generator
@@ -248,7 +277,6 @@ export default function App() {
 
           setPulseFinancials((prevF) => {
             const computeInc = pInstances * COMPUTE_RATE_PER_INSTANCE_SEC;
-            // In normal mode PulseGuard eliminates ecom losses and CSP SLA breach penalties
             const ecomLossInc = isFailsafe ? ((Math.max(0, new503s) * ECOM_503_BOUNCE_LOSS) + (newOversold * ECOM_OVERSELL_PENALTY)) : 0;
             const cspLossInc = (isFailsafe && isOutageSec) ? (CSP_SRE_OVERHEAD_PER_SEC + CSP_SLA_REFUND_CREDIT_PER_SEC) : 0;
             const total = prevF.computeCost + computeInc + prevF.ecomLoss + ecomLossInc + prevF.cspLoss + cspLossInc;
@@ -269,6 +297,7 @@ export default function App() {
   }, [isRunning, isFailsafe, durationMinutes, currentRps, reactiveStats.latencyMs, reactiveStats.instances]);
 
   const handleStartSimulation = () => {
+    setShowCompletionDebrief(false);
     waveRef.current = {
       pattern: 'BASELINE',
       targetRps: 5,
@@ -283,6 +312,7 @@ export default function App() {
 
   const handleReset = () => {
     setIsRunning(false);
+    setShowCompletionDebrief(false);
     setElapsedSec(0);
     setCurrentRps(5);
     setIsFailsafe(false);
@@ -315,7 +345,6 @@ export default function App() {
   };
 
   // Granular Cost Extrapolation Helper
-  // Extrapolates to 1 Day, 1 Week, 1 Month (30d), and 1 Year (365d)
   const calcDetailedProjections = () => {
     const elapsed = Math.max(1, elapsedSec);
     const multiplier = (seconds) => seconds / elapsed;
@@ -373,8 +402,169 @@ export default function App() {
 
   const projections = calcDetailedProjections();
 
+  // Tour Step Definitions
+  const tourSteps = [
+    {
+      title: "Welcome to PulseGuard (Team ApexScale)",
+      content: "PulseGuard is an Autonomous Multi-Cloud Resilience & Inventory Guardrail Agent built with Gemini Omni, Google Cloud Run, and BigQuery. This tour will guide you on how to run a live flash-sale simulation and interpret the results.",
+      highlight: null
+    },
+    {
+      title: "1. Control Bar & Duration Setup",
+      content: "Here you set the test duration (1 to 10 minutes) and start the simulation. The engine automatically alternates between steady baselines, gradual ramps, and sudden flash surges (up to 240 RPS) without needing page refreshes.",
+      highlight: "controls"
+    },
+    {
+      title: "2. The 'BEFORE' Card: Reactive Autoscaling Failure",
+      content: "Standard autoscalers (AWS/GCP/Kubernetes) wait for CPU thresholds to breach, creating a 2-5 minute lag. Watch this card to observe cascading 503 errors, high latency (>3000ms), and Amazon/Flipkart inventory overselling.",
+      highlight: "reactive"
+    },
+    {
+      title: "3. The 'AFTER' Card: PulseGuard Proactive Agent",
+      content: "PulseGuard correlates real-time API telemetry slopes via Gemini Omni to proactively scale Cloud Run instances BEFORE traffic hits, while locking safety-stock buffers across marketplace APIs with idempotent keys.",
+      highlight: "pulseguard"
+    },
+    {
+      title: "4. Enterprise Financials & CSP Loss Breakdown",
+      content: "See the real-time cost breakdown across Pure Cloud Compute, Merchant Platform Losses (503 churn + oversell penalties), and Cloud Service Provider (CSP) Outage Losses extrapolated to 1 Day, 1 Week, 1 Month, and 1 Year.",
+      highlight: "financials"
+    }
+  ];
+
   return (
-    <div className="max-w-7xl mx-auto p-6 space-y-6">
+    <div className="max-w-7xl mx-auto p-6 space-y-6 relative">
+      {/* GUIDED TOUR OVERLAY MODAL */}
+      {tourStep > 0 && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-indigo-500/40 rounded-2xl p-6 max-w-lg w-full space-y-5 shadow-2xl shadow-indigo-500/20 animate-in fade-in zoom-in duration-200">
+            <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+              <div className="flex items-center gap-2 text-indigo-400 font-semibold text-sm">
+                <Sparkles className="w-4 h-4 text-indigo-400 animate-spin" />
+                Interactive Dashboard Tour (Step {tourStep} of {tourSteps.length})
+              </div>
+              <button
+                onClick={closeTour}
+                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <h3 className="text-xl font-bold text-white">
+                {tourSteps[tourStep - 1].title}
+              </h3>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                {tourSteps[tourStep - 1].content}
+              </p>
+            </div>
+
+            {/* Stepper Dots & Navigation Buttons */}
+            <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+              <div className="flex items-center gap-1.5">
+                {tourSteps.map((_, idx) => (
+                  <span
+                    key={idx}
+                    className={`h-2 rounded-full transition-all duration-300 ${
+                      idx + 1 === tourStep
+                        ? 'w-6 bg-indigo-500'
+                        : 'w-2 bg-slate-700'
+                    }`}
+                  />
+                ))}
+              </div>
+
+              <div className="flex items-center gap-2">
+                {tourStep > 1 && (
+                  <button
+                    onClick={() => setTourStep(tourStep - 1)}
+                    className="flex items-center gap-1 px-3 py-1.5 rounded-lg border border-slate-700 text-xs text-slate-300 hover:bg-slate-800 transition"
+                  >
+                    <ChevronLeft className="w-3.5 h-3.5" />
+                    Back
+                  </button>
+                )}
+                {tourStep < tourSteps.length ? (
+                  <button
+                    onClick={() => setTourStep(tourStep + 1)}
+                    className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white shadow-md shadow-indigo-600/30 transition"
+                  >
+                    Next
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                ) : (
+                  <button
+                    onClick={closeTour}
+                    className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-xs font-semibold text-white shadow-md shadow-emerald-600/30 transition"
+                  >
+                    Let's Test! 🚀
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* POST-SIMULATION DEBRIEF BANNER (POINTS OUT WHAT IS WHAT) */}
+      {showCompletionDebrief && (
+        <div className="bg-gradient-to-r from-emerald-950/80 via-slate-900 to-indigo-950/80 border border-emerald-500/50 rounded-2xl p-5 shadow-xl space-y-4 animate-in slide-in-from-top-4 duration-300">
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-3">
+              <span className="p-2 rounded-xl bg-emerald-500/20 border border-emerald-500/40 text-emerald-400">
+                <CheckCircle2 className="w-6 h-6" />
+              </span>
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  Simulation Complete — Key Takeaways & Architectural Debrief
+                </h3>
+                <p className="text-xs text-slate-300">
+                  Here is the side-by-side verification of how PulseGuard protected availability and revenue:
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => setShowCompletionDebrief(false)}
+              className="text-slate-400 hover:text-white p-1 rounded hover:bg-slate-800 transition"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800 space-y-1">
+              <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+                <ShieldAlert className="w-4 h-4 text-rose-500" />
+                1. The Reactive Failure Mode
+              </div>
+              <p className="text-slate-400 text-[11px] leading-relaxed">
+                Notice the left card: traditional autoscaling lagged 2-5 minutes behind, causing <strong>{reactiveStats.error503s}</strong> checkout crashes and <strong>{reactiveStats.oversoldItems}</strong> oversold orders.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-emerald-900/50 space-y-1">
+              <div className="font-semibold text-emerald-300 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                2. PulseGuard Autonomous Defense
+              </div>
+              <p className="text-slate-400 text-[11px] leading-relaxed">
+                Notice the right card: Gemini Omni detected the traffic velocity slope and scaled Cloud Run to pre-warmed capacity, maintaining ~180ms latency and <strong>0 crashes</strong>.
+              </p>
+            </div>
+
+            <div className="p-3 rounded-xl bg-slate-950/70 border border-indigo-900/50 space-y-1">
+              <div className="font-semibold text-indigo-300 flex items-center gap-1.5">
+                <DollarSign className="w-4 h-4 text-indigo-400" />
+                3. Compounded Annual ROI
+              </div>
+              <p className="text-slate-400 text-[11px] leading-relaxed">
+                Notice the bottom table: while compute cost is identical, PulseGuard saves <strong>${projections.year.netSavings.toLocaleString('en-US', { maximumFractionDigits: 0 })}</strong> annually in avoided SLA penalties and bounce losses.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Top Header */}
       <header className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-800 pb-5">
         <div>
@@ -399,8 +589,17 @@ export default function App() {
           </div>
         </div>
 
-        {/* Global Status Banner */}
+        {/* Global Status Banner & Tour Trigger */}
         <div className="flex items-center gap-3">
+          <button
+            onClick={restartTour}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-indigo-700/50 bg-indigo-950/40 hover:bg-indigo-900/50 text-xs text-indigo-300 font-medium transition shadow-sm"
+            title="Start Interactive Guided Tour"
+          >
+            <HelpCircle className="w-3.5 h-3.5" />
+            Guided Tour
+          </button>
+
           <div
             className={`px-3 py-1.5 rounded-full text-xs font-mono font-medium flex items-center gap-2 border ${
               isFailsafe
@@ -417,7 +616,9 @@ export default function App() {
       </header>
 
       {/* Control Strip & Timer Input */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
+      <div className={`bg-slate-900/80 border rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 transition-all duration-300 ${
+        tourStep === 2 ? 'ring-2 ring-indigo-500 border-indigo-500 bg-slate-900' : 'border-slate-800'
+      }`}>
         <div className="flex items-center gap-6">
           <div>
             <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Live Traffic</div>
@@ -519,7 +720,9 @@ export default function App() {
       {/* Side-by-Side Comparison Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* BEFORE: Reactive Autoscaling Card */}
-        <div className="bg-slate-900/50 border border-rose-900/30 rounded-2xl p-6 space-y-6 relative overflow-hidden">
+        <div className={`bg-slate-900/50 border rounded-2xl p-6 space-y-6 relative overflow-hidden transition-all duration-300 ${
+          tourStep === 3 ? 'ring-2 ring-rose-500 border-rose-500 bg-slate-900/90' : 'border-rose-900/30'
+        }`}>
           <div className="absolute top-0 right-0 px-3 py-1 bg-rose-500/10 border-b border-l border-rose-500/30 text-rose-400 text-xs font-semibold rounded-bl-lg">
             BEFORE (Traditional Reactive)
           </div>
@@ -632,7 +835,9 @@ export default function App() {
         </div>
 
         {/* AFTER: PulseGuard Autonomous Agent Card */}
-        <div className="bg-slate-900/50 border border-emerald-900/40 rounded-2xl p-6 space-y-6 relative overflow-hidden">
+        <div className={`bg-slate-900/50 border rounded-2xl p-6 space-y-6 relative overflow-hidden transition-all duration-300 ${
+          tourStep === 4 ? 'ring-2 ring-emerald-500 border-emerald-500 bg-slate-900/90' : 'border-emerald-900/40'
+        }`}>
           <div className="absolute top-0 right-0 px-3 py-1 bg-emerald-500/10 border-b border-l border-emerald-500/30 text-emerald-400 text-xs font-semibold rounded-bl-lg">
             AFTER (PulseGuard Agentic)
           </div>
@@ -742,7 +947,9 @@ export default function App() {
       </div>
 
       {/* DETAILED 3-TIER COST PREDICTION & BUSINESS IMPACT ANALYTICS */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-6">
+      <div className={`bg-slate-900/80 border rounded-2xl p-6 space-y-6 transition-all duration-300 ${
+        tourStep === 5 ? 'ring-2 ring-indigo-500 border-indigo-500 bg-slate-900' : 'border-slate-800'
+      }`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
