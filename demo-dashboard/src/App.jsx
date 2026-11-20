@@ -17,7 +17,10 @@ import {
   Sliders,
   Calendar,
   ArrowUpRight,
-  TrendingDown
+  TrendingDown,
+  Cloud,
+  ShoppingBag,
+  Building2
 } from 'lucide-react';
 
 export default function App() {
@@ -31,25 +34,36 @@ export default function App() {
   const [currentRps, setCurrentRps] = useState(5);
   const [trafficPattern, setTrafficPattern] = useState('IDLE'); // 'STEADY_BASELINE', 'GRADUAL_UP', 'SUDDEN_SPIKE', 'SUDDEN_DROP', 'COOLDOWN'
 
-  // Pricing model parameters:
-  // Cloud Run instance rate ~$0.000036 per vCPU-second + memory ($0.13/hour per instance -> ~$0.0000361/sec)
-  // Overhead cost of 503 outage loss per request ~$0.08 (customer churn / bounce)
-  // Marketplace overselling SLA penalty per order ~$15.00
-  const COST_PER_INSTANCE_SEC = 0.0000361;
-  const OUTAGE_COST_PER_503 = 0.08;
-  const OVERSELL_PENALTY = 15.00;
+  // =========================================================================
+  // Granular Financial Model Parameters:
+  // 1. Pure Cloud Compute (Cloud Run / vCPU + RAM):
+  //    ~$0.0000361 / second per active instance (~$0.13/hour)
+  // 2. E-Commerce Platform Business Losses (Direct Merchant Loss):
+  //    - Abandoned checkout / bounce per 503 error: $0.12 (lost GMV margin & customer friction)
+  //    - Marketplace overselling penalty per order (Amazon/Flipkart SLA cancellation): $15.00
+  // 3. Cloud Service Provider (CSP - GCP/AWS) Losses:
+  //    - SRE incident response & triage engineering overhead per crash event: ~$0.04/sec during active outage
+  //    - SLA breach refund credit guarantee: 10% - 25% compute refund on downtime breaches (~$0.025/sec during outage)
+  // =========================================================================
+  const COMPUTE_RATE_PER_INSTANCE_SEC = 0.0000361;
+  const ECOM_503_BOUNCE_LOSS = 0.12;
+  const ECOM_OVERSELL_PENALTY = 15.00;
+  const CSP_SRE_OVERHEAD_PER_SEC = 0.04;
+  const CSP_SLA_REFUND_CREDIT_PER_SEC = 0.025;
 
   // Cumulative Cost Trackers
-  const [reactiveCost, setReactiveCost] = useState({
+  const [reactiveFinancials, setReactiveFinancials] = useState({
     computeCost: 0,
-    penaltyLoss: 0,
-    totalCost: 0
+    ecomLoss: 0,
+    cspLoss: 0,
+    totalLoss: 0
   });
 
-  const [pulseCost, setPulseCost] = useState({
+  const [pulseFinancials, setPulseFinancials] = useState({
     computeCost: 0,
-    penaltyLoss: 0,
-    totalCost: 0
+    ecomLoss: 0,
+    cspLoss: 0,
+    totalLoss: 0
   });
 
   // Reactive Autoscaler Stats (Before)
@@ -156,6 +170,7 @@ export default function App() {
           let new503s = 0;
           let newOversold = 0;
           let rStatus = 'OPTIMAL';
+          let isOutageSec = false;
 
           if (nextRps > 70) {
             // Reactive autoscaler lags behind!
@@ -164,6 +179,7 @@ export default function App() {
             new503s = Math.round((nextRps - (rInstances * 15)) * 0.45);
             newOversold = nextRps > 120 ? 2 : 0;
             rStatus = 'CRITICAL_LAG';
+            isOutageSec = true;
           } else {
             rInstances = Math.max(1, rInstances - 1);
             rLatency = Math.max(190, reactiveStats.latencyMs - 120);
@@ -186,12 +202,12 @@ export default function App() {
           let pChannels = [];
 
           if (isFailsafe) {
+            // Watchdog circuit breaker tripped to native autoscaler
             pInstances = rInstances;
             pLatency = rLatency;
             pStatus = 'FAILSAFE_ENGAGED: Native Autoscaler Active';
           } else if (nextRps > 50) {
             // Proactive scaling calculates exact required instances ahead of time:
-            // Instances = ceil((RPS * 0.25) / 10) clamped 1..15
             pInstances = Math.min(15, Math.max(2, Math.ceil((nextRps * 0.3) / 8)));
             pLatency = Math.floor(180 + Math.random() * 35);
             pLockedStock = 30;
@@ -215,23 +231,33 @@ export default function App() {
             status: pStatus
           }));
 
-          // Compute Tick Costs
-          setReactiveCost((prevC) => {
-            const comp = prevC.computeCost + (rInstances * COST_PER_INSTANCE_SEC);
-            const loss = prevC.penaltyLoss + (Math.max(0, new503s) * OUTAGE_COST_PER_503) + (newOversold * OVERSELL_PENALTY);
+          // Compute Granular Financials (Compute + E-Com + CSP Losses)
+          setReactiveFinancials((prevF) => {
+            const computeInc = rInstances * COMPUTE_RATE_PER_INSTANCE_SEC;
+            const ecomLossInc = (Math.max(0, new503s) * ECOM_503_BOUNCE_LOSS) + (newOversold * ECOM_OVERSELL_PENALTY);
+            const cspLossInc = isOutageSec ? (CSP_SRE_OVERHEAD_PER_SEC + CSP_SLA_REFUND_CREDIT_PER_SEC) : 0;
+            const total = prevF.computeCost + computeInc + prevF.ecomLoss + ecomLossInc + prevF.cspLoss + cspLossInc;
+
             return {
-              computeCost: comp,
-              penaltyLoss: loss,
-              totalCost: comp + loss
+              computeCost: prevF.computeCost + computeInc,
+              ecomLoss: prevF.ecomLoss + ecomLossInc,
+              cspLoss: prevF.cspLoss + cspLossInc,
+              totalLoss: total
             };
           });
 
-          setPulseCost((prevC) => {
-            const comp = prevC.computeCost + (pInstances * COST_PER_INSTANCE_SEC);
+          setPulseFinancials((prevF) => {
+            const computeInc = pInstances * COMPUTE_RATE_PER_INSTANCE_SEC;
+            // In normal mode PulseGuard eliminates ecom losses and CSP SLA breach penalties
+            const ecomLossInc = isFailsafe ? ((Math.max(0, new503s) * ECOM_503_BOUNCE_LOSS) + (newOversold * ECOM_OVERSELL_PENALTY)) : 0;
+            const cspLossInc = (isFailsafe && isOutageSec) ? (CSP_SRE_OVERHEAD_PER_SEC + CSP_SLA_REFUND_CREDIT_PER_SEC) : 0;
+            const total = prevF.computeCost + computeInc + prevF.ecomLoss + ecomLossInc + prevF.cspLoss + cspLossInc;
+
             return {
-              computeCost: comp,
-              penaltyLoss: 0, // Zero penalty loss!
-              totalCost: comp
+              computeCost: prevF.computeCost + computeInc,
+              ecomLoss: prevF.ecomLoss + ecomLossInc,
+              cspLoss: prevF.cspLoss + cspLossInc,
+              totalLoss: total
             };
           });
 
@@ -261,8 +287,8 @@ export default function App() {
     setCurrentRps(5);
     setIsFailsafe(false);
     setTrafficPattern('IDLE');
-    setReactiveCost({ computeCost: 0, penaltyLoss: 0, totalCost: 0 });
-    setPulseCost({ computeCost: 0, penaltyLoss: 0, totalCost: 0 });
+    setReactiveFinancials({ computeCost: 0, ecomLoss: 0, cspLoss: 0, totalLoss: 0 });
+    setPulseFinancials({ computeCost: 0, ecomLoss: 0, cspLoss: 0, totalLoss: 0 });
     setReactiveStats({
       instances: 1,
       latencyMs: 195,
@@ -288,49 +314,64 @@ export default function App() {
     setIsFailsafe(!isFailsafe);
   };
 
-  // Cost Extrapolation Helper
-  // Multiplies the run rate to 1 Day, 1 Week, 1 Month (30d), 1 Year (365d)
-  const calcProjections = () => {
+  // Granular Cost Extrapolation Helper
+  // Extrapolates to 1 Day, 1 Week, 1 Month (30d), and 1 Year (365d)
+  const calcDetailedProjections = () => {
     const elapsed = Math.max(1, elapsedSec);
-    const rRunRatePerSec = reactiveCost.totalCost / elapsed;
-    const pRunRatePerSec = pulseCost.totalCost / elapsed;
-    const netSavingsPerSec = Math.max(0, rRunRatePerSec - pRunRatePerSec);
+    const multiplier = (seconds) => seconds / elapsed;
 
     const SEC_IN_DAY = 86400;
     const SEC_IN_WEEK = 604800;
     const SEC_IN_MONTH = 2592000;
     const SEC_IN_YEAR = 31536000;
 
+    const getHorizon = (seconds) => {
+      const m = multiplier(seconds);
+      const rCompute = reactiveFinancials.computeCost * m;
+      const rEcom = reactiveFinancials.ecomLoss * m;
+      const rCsp = reactiveFinancials.cspLoss * m;
+      const rTotal = rCompute + rEcom + rCsp;
+
+      const pCompute = pulseFinancials.computeCost * m;
+      const pEcom = pulseFinancials.ecomLoss * m;
+      const pCsp = pulseFinancials.cspLoss * m;
+      const pTotal = pCompute + pEcom + pCsp;
+
+      return {
+        rCompute,
+        rEcom,
+        rCsp,
+        rTotal,
+        pCompute,
+        pEcom,
+        pCsp,
+        pTotal,
+        netSavings: Math.max(0, rTotal - pTotal),
+        ecomSaved: Math.max(0, rEcom - pEcom),
+        cspSaved: Math.max(0, rCsp - pCsp)
+      };
+    };
+
     return {
       testRun: {
-        reactive: reactiveCost.totalCost,
-        pulse: pulseCost.totalCost,
-        savings: Math.max(0, reactiveCost.totalCost - pulseCost.totalCost)
+        rCompute: reactiveFinancials.computeCost,
+        rEcom: reactiveFinancials.ecomLoss,
+        rCsp: reactiveFinancials.cspLoss,
+        rTotal: reactiveFinancials.totalLoss,
+        pCompute: pulseFinancials.computeCost,
+        pEcom: pulseFinancials.ecomLoss,
+        pCsp: pulseFinancials.cspLoss,
+        pTotal: pulseFinancials.totalLoss,
+        netSavings: Math.max(0, reactiveFinancials.totalLoss - pulseFinancials.totalLoss)
       },
-      day: {
-        reactive: rRunRatePerSec * SEC_IN_DAY,
-        pulse: pRunRatePerSec * SEC_IN_DAY,
-        savings: netSavingsPerSec * SEC_IN_DAY
-      },
-      week: {
-        reactive: rRunRatePerSec * SEC_IN_WEEK,
-        pulse: pRunRatePerSec * SEC_IN_WEEK,
-        savings: netSavingsPerSec * SEC_IN_WEEK
-      },
-      month: {
-        reactive: rRunRatePerSec * SEC_IN_MONTH,
-        pulse: pRunRatePerSec * SEC_IN_MONTH,
-        savings: netSavingsPerSec * SEC_IN_MONTH
-      },
-      year: {
-        reactive: rRunRatePerSec * SEC_IN_YEAR,
-        pulse: pRunRatePerSec * SEC_IN_YEAR,
-        savings: netSavingsPerSec * SEC_IN_YEAR
-      }
+      day: getHorizon(SEC_IN_DAY),
+      week: getHorizon(SEC_IN_WEEK),
+      month: getHorizon(SEC_IN_MONTH),
+      year: getHorizon(SEC_IN_YEAR)
     };
   };
 
-  const projections = calcProjections();
+  const projections = calcDetailedProjections();
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
@@ -546,17 +587,46 @@ export default function App() {
             </div>
           </div>
 
-          {/* Cost Tracker Card */}
-          <div className="bg-rose-950/20 border border-rose-900/50 p-4 rounded-xl flex items-center justify-between">
-            <div>
-              <div className="text-xs text-rose-300 font-semibold uppercase tracking-wider">Test Run Total Incident Cost</div>
-              <div className="text-2xl font-bold text-rose-400 font-mono mt-0.5">
-                ${reactiveCost.totalCost.toFixed(2)}
+          {/* Granular Cost Breakdown Card */}
+          <div className="bg-rose-950/20 border border-rose-900/50 p-4 rounded-xl space-y-3">
+            <div className="flex items-center justify-between border-b border-rose-900/40 pb-2">
+              <div className="text-xs text-rose-300 font-semibold uppercase tracking-wider">Test Run Total Incident Loss</div>
+              <div className="text-2xl font-bold text-rose-400 font-mono">
+                ${reactiveFinancials.totalLoss.toFixed(2)}
               </div>
             </div>
-            <div className="text-right text-xs text-slate-400 space-y-0.5">
-              <div>Compute: <span className="font-mono text-slate-300">${reactiveCost.computeCost.toFixed(4)}</span></div>
-              <div>503 & Oversell Penalty: <span className="font-mono text-rose-300 font-semibold">${reactiveCost.penaltyLoss.toFixed(2)}</span></div>
+
+            {/* 3-Tier Split */}
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="p-2 rounded bg-slate-950/70 border border-slate-800">
+                <div className="flex items-center gap-1 text-slate-400">
+                  <Cloud className="w-3 h-3 text-indigo-400" />
+                  Pure Compute:
+                </div>
+                <div className="font-mono text-slate-200 font-semibold mt-1">
+                  ${reactiveFinancials.computeCost.toFixed(4)}
+                </div>
+              </div>
+
+              <div className="p-2 rounded bg-slate-950/70 border border-rose-900/40">
+                <div className="flex items-center gap-1 text-rose-300">
+                  <ShoppingBag className="w-3 h-3 text-rose-400" />
+                  E-Com Platform Loss:
+                </div>
+                <div className="font-mono text-rose-400 font-bold mt-1">
+                  ${reactiveFinancials.ecomLoss.toFixed(2)}
+                </div>
+              </div>
+
+              <div className="p-2 rounded bg-slate-950/70 border border-amber-900/40">
+                <div className="flex items-center gap-1 text-amber-300">
+                  <Building2 className="w-3 h-3 text-amber-400" />
+                  Cloud Provider Loss:
+                </div>
+                <div className="font-mono text-amber-400 font-bold mt-1">
+                  ${reactiveFinancials.cspLoss.toFixed(2)}
+                </div>
+              </div>
             </div>
           </div>
         </div>
@@ -626,140 +696,232 @@ export default function App() {
             </div>
           </div>
 
-          {/* Cost Tracker Card */}
-          <div className="bg-emerald-950/20 border border-emerald-900/50 p-4 rounded-xl flex items-center justify-between">
-            <div>
+          {/* Granular Cost Breakdown Card */}
+          <div className="bg-emerald-950/20 border border-emerald-900/50 p-4 rounded-xl space-y-3">
+            <div className="flex items-center justify-between border-b border-emerald-900/40 pb-2">
               <div className="text-xs text-emerald-300 font-semibold uppercase tracking-wider">Test Run Total Incident Cost</div>
-              <div className="text-2xl font-bold text-emerald-400 font-mono mt-0.5">
-                ${pulseCost.totalCost.toFixed(2)}
+              <div className="text-2xl font-bold text-emerald-400 font-mono">
+                ${pulseFinancials.totalLoss.toFixed(4)}
               </div>
             </div>
-            <div className="text-right text-xs text-slate-400 space-y-0.5">
-              <div>Pure Compute: <span className="font-mono text-slate-300">${pulseCost.computeCost.toFixed(4)}</span></div>
-              <div>Penalties Avoided: <span className="font-mono text-emerald-300 font-semibold">${reactiveCost.penaltyLoss.toFixed(2)} saved</span></div>
+
+            {/* 3-Tier Split */}
+            <div className="grid grid-cols-3 gap-2 text-xs">
+              <div className="p-2 rounded bg-slate-950/70 border border-slate-800">
+                <div className="flex items-center gap-1 text-slate-400">
+                  <Cloud className="w-3 h-3 text-indigo-400" />
+                  Pure Compute:
+                </div>
+                <div className="font-mono text-slate-200 font-semibold mt-1">
+                  ${pulseFinancials.computeCost.toFixed(4)}
+                </div>
+              </div>
+
+              <div className="p-2 rounded bg-slate-950/70 border border-emerald-900/40">
+                <div className="flex items-center gap-1 text-emerald-300">
+                  <ShoppingBag className="w-3 h-3 text-emerald-400" />
+                  E-Com Platform Loss:
+                </div>
+                <div className="font-mono text-emerald-400 font-bold mt-1">
+                  $0.00 <span className="text-[10px] text-emerald-500 font-normal">saved</span>
+                </div>
+              </div>
+
+              <div className="p-2 rounded bg-slate-950/70 border border-emerald-900/40">
+                <div className="flex items-center gap-1 text-emerald-300">
+                  <Building2 className="w-3 h-3 text-emerald-400" />
+                  Cloud Provider Loss:
+                </div>
+                <div className="font-mono text-emerald-400 font-bold mt-1">
+                  $0.00 <span className="text-[10px] text-emerald-500 font-normal">saved</span>
+                </div>
+              </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* COST PREDICTION & BUSINESS IMPACT ANALYTICS (1 Day, 1 Week, 1 Month, 1 Year) */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-5">
+      {/* DETAILED 3-TIER COST PREDICTION & BUSINESS IMPACT ANALYTICS */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
           <div>
             <h3 className="text-lg font-bold text-white flex items-center gap-2">
               <DollarSign className="w-5 h-5 text-emerald-400" />
-              Enterprise Financial Impact & Cloud Cost Extrapolation
+              Enterprise Financial Impact & Extrapolated Cost Recovery
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">
-              Showing how small per-second micro-outages & overselling penalties compound into massive annual cloud waste
+              Comprehensive breakdown of Pure Compute, Merchant Platform Losses, and Cloud Provider (CSP) Outage Overhead
             </p>
           </div>
           <div className="flex items-center gap-2 text-xs font-mono bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 px-3 py-1.5 rounded-lg">
-            <span>Projected Annual Savings:</span>
+            <span>Projected Annual Net Savings:</span>
             <strong className="text-base font-bold text-emerald-400">
-              ${projections.year.savings.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+              ${projections.year.netSavings.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
             </strong>
           </div>
         </div>
 
-        {/* Projection Cards Grid */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+        {/* 4 Time Horizon Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           {/* 1 Day */}
-          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-semibold text-slate-300">1 Day Extrapolation</span>
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2">
+              <span className="font-semibold text-slate-200">1 Day Extrapolation</span>
               <Calendar className="w-4 h-4 text-slate-500" />
             </div>
-            <div className="text-xs space-y-1 text-slate-400">
-              <div className="flex justify-between">
-                <span>Reactive:</span>
-                <span className="font-mono text-rose-400">${projections.day.reactive.toFixed(2)}</span>
+
+            <div className="text-xs space-y-1.5 text-slate-400">
+              <div className="flex justify-between items-center">
+                <span>Pure Compute:</span>
+                <span className="font-mono text-slate-300">${projections.day.rCompute.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>PulseGuard:</span>
-                <span className="font-mono text-emerald-400">${projections.day.pulse.toFixed(2)}</span>
+              <div className="flex justify-between items-center text-rose-300">
+                <span>E-Com Platform Loss:</span>
+                <span className="font-mono font-semibold">${projections.day.rEcom.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center text-amber-300">
+                <span>Cloud Provider Loss:</span>
+                <span className="font-mono font-semibold">${projections.day.rCsp.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-800 font-bold text-white">
+                <span>Total Reactive Loss:</span>
+                <span className="font-mono text-rose-400">${projections.day.rTotal.toFixed(2)}</span>
               </div>
             </div>
-            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
-              <span>Saved:</span>
-              <span className="font-mono">+${projections.day.savings.toFixed(2)}</span>
+
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-emerald-400 bg-emerald-950/20 p-2 rounded">
+              <span>PulseGuard ROI:</span>
+              <span className="font-mono">+${projections.day.netSavings.toFixed(2)}</span>
             </div>
           </div>
 
           {/* 1 Week */}
-          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-semibold text-slate-300">1 Week Extrapolation</span>
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2">
+              <span className="font-semibold text-slate-200">1 Week Extrapolation</span>
               <Calendar className="w-4 h-4 text-slate-500" />
             </div>
-            <div className="text-xs space-y-1 text-slate-400">
-              <div className="flex justify-between">
-                <span>Reactive:</span>
-                <span className="font-mono text-rose-400">${projections.week.reactive.toFixed(2)}</span>
+
+            <div className="text-xs space-y-1.5 text-slate-400">
+              <div className="flex justify-between items-center">
+                <span>Pure Compute:</span>
+                <span className="font-mono text-slate-300">${projections.week.rCompute.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>PulseGuard:</span>
-                <span className="font-mono text-emerald-400">${projections.week.pulse.toFixed(2)}</span>
+              <div className="flex justify-between items-center text-rose-300">
+                <span>E-Com Platform Loss:</span>
+                <span className="font-mono font-semibold">${projections.week.rEcom.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center text-amber-300">
+                <span>Cloud Provider Loss:</span>
+                <span className="font-mono font-semibold">${projections.week.rCsp.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-800 font-bold text-white">
+                <span>Total Reactive Loss:</span>
+                <span className="font-mono text-rose-400">${projections.week.rTotal.toFixed(2)}</span>
               </div>
             </div>
-            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
-              <span>Saved:</span>
-              <span className="font-mono">+${projections.week.savings.toFixed(2)}</span>
+
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-emerald-400 bg-emerald-950/20 p-2 rounded">
+              <span>PulseGuard ROI:</span>
+              <span className="font-mono">+${projections.week.netSavings.toFixed(2)}</span>
             </div>
           </div>
 
           {/* 1 Month */}
-          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span className="font-semibold text-slate-300">1 Month (30 Days)</span>
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-3">
+            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2">
+              <span className="font-semibold text-slate-200">1 Month (30 Days)</span>
               <Calendar className="w-4 h-4 text-slate-500" />
             </div>
-            <div className="text-xs space-y-1 text-slate-400">
-              <div className="flex justify-between">
-                <span>Reactive:</span>
-                <span className="font-mono text-rose-400">${projections.month.reactive.toFixed(2)}</span>
+
+            <div className="text-xs space-y-1.5 text-slate-400">
+              <div className="flex justify-between items-center">
+                <span>Pure Compute:</span>
+                <span className="font-mono text-slate-300">${projections.month.rCompute.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>PulseGuard:</span>
-                <span className="font-mono text-emerald-400">${projections.month.pulse.toFixed(2)}</span>
+              <div className="flex justify-between items-center text-rose-300">
+                <span>E-Com Platform Loss:</span>
+                <span className="font-mono font-semibold">${projections.month.rEcom.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center text-amber-300">
+                <span>Cloud Provider Loss:</span>
+                <span className="font-mono font-semibold">${projections.month.rCsp.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-800 font-bold text-white">
+                <span>Total Reactive Loss:</span>
+                <span className="font-mono text-rose-400">${projections.month.rTotal.toFixed(2)}</span>
               </div>
             </div>
-            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
-              <span>Saved:</span>
-              <span className="font-mono">+${projections.month.savings.toFixed(2)}</span>
+
+            <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between text-xs font-bold text-emerald-400 bg-emerald-950/20 p-2 rounded">
+              <span>PulseGuard ROI:</span>
+              <span className="font-mono">+${projections.month.netSavings.toFixed(2)}</span>
             </div>
           </div>
 
           {/* 1 Year */}
-          <div className="bg-slate-950/60 border border-emerald-900/40 p-4 rounded-xl space-y-2 bg-gradient-to-br from-slate-950 to-emerald-950/20">
-            <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="bg-slate-950/60 border border-emerald-900/50 p-4 rounded-xl space-y-3 bg-gradient-to-br from-slate-950 to-emerald-950/25">
+            <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800/60 pb-2">
               <span className="font-semibold text-emerald-300">1 Year (Annual Impact)</span>
               <ArrowUpRight className="w-4 h-4 text-emerald-400" />
             </div>
-            <div className="text-xs space-y-1 text-slate-400">
-              <div className="flex justify-between">
-                <span>Reactive:</span>
-                <span className="font-mono text-rose-400">${projections.year.reactive.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+
+            <div className="text-xs space-y-1.5 text-slate-400">
+              <div className="flex justify-between items-center">
+                <span>Pure Compute:</span>
+                <span className="font-mono text-slate-300">${projections.year.rCompute.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
               </div>
-              <div className="flex justify-between">
-                <span>PulseGuard:</span>
-                <span className="font-mono text-emerald-400">${projections.year.pulse.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              <div className="flex justify-between items-center text-rose-300">
+                <span>E-Com Platform Loss:</span>
+                <span className="font-mono font-semibold">${projections.year.rEcom.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex justify-between items-center text-amber-300">
+                <span>Cloud Provider Loss:</span>
+                <span className="font-mono font-semibold">${projections.year.rCsp.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex justify-between items-center pt-1 border-t border-slate-800 font-bold text-white">
+                <span>Total Reactive Loss:</span>
+                <span className="font-mono text-rose-400">${projections.year.rTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
               </div>
             </div>
-            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
+
+            <div className="pt-2 border-t border-emerald-800/60 flex items-center justify-between text-xs font-bold text-emerald-300 bg-emerald-950/60 p-2 rounded border border-emerald-700/40">
               <span>Net Annual ROI:</span>
-              <span className="font-mono">+${projections.year.savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              <span className="font-mono text-emerald-400">+${projections.year.netSavings.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
             </div>
           </div>
         </div>
 
-        {/* Breakdown Explainer Footnote */}
-        <div className="p-3 bg-slate-950/50 border border-slate-800 rounded-lg text-xs text-slate-400 flex flex-col md:flex-row md:items-center justify-between gap-2">
-          <div>
-            💡 <strong>Cost Model Basis:</strong> Cloud Run compute ($0.000036/vCPU-sec) + 503 outage drop penalty ($0.08/customer drop) + Marketplace overselling SLA penalty ($15.00/oversold unit).
+        {/* 3-Tier Stakeholder Impact Definitions */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-2">
+          <div className="p-3 bg-slate-950/70 border border-slate-800 rounded-lg text-xs space-y-1">
+            <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+              <Cloud className="w-3.5 h-3.5 text-indigo-400" />
+              1. Pure Compute Cost
+            </div>
+            <p className="text-slate-400 text-[11px] leading-relaxed">
+              Standard Cloud Run compute ($0.000036/sec per container). Shows that compute alone is tiny compared to the business damage of being down.
+            </p>
           </div>
-          <div className="text-slate-300 font-medium shrink-0">
-            PulseGuard eliminates 100% of 503 outage drops and oversell penalties.
+
+          <div className="p-3 bg-slate-950/70 border border-rose-900/40 rounded-lg text-xs space-y-1">
+            <div className="font-semibold text-rose-300 flex items-center gap-1.5">
+              <ShoppingBag className="w-3.5 h-3.5 text-rose-400" />
+              2. E-Commerce Platform Losses
+            </div>
+            <p className="text-slate-400 text-[11px] leading-relaxed">
+              Direct merchant damage: Abandoned checkouts & customer bounce ($0.12/503) + Amazon/Flipkart/ONDC cancellation penalties ($15.00/oversold item).
+            </p>
+          </div>
+
+          <div className="p-3 bg-slate-950/70 border border-amber-900/40 rounded-lg text-xs space-y-1">
+            <div className="font-semibold text-amber-300 flex items-center gap-1.5">
+              <Building2 className="w-3.5 h-3.5 text-amber-400" />
+              3. Cloud Provider (CSP) Outage Losses
+            </div>
+            <p className="text-slate-400 text-[11px] leading-relaxed">
+              Damage to Google Cloud / AWS: SRE triage war-room engineer overhead ($0.04/sec) + mandatory contractual SLA breach refund credits ($0.025/sec).
+            </p>
           </div>
         </div>
       </div>
