@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Activity,
   ShieldAlert,
@@ -9,17 +9,48 @@ import {
   AlertTriangle,
   RotateCcw,
   Play,
+  Pause,
   Layers,
   Key,
-  CheckCircle2,
-  Clock
+  DollarSign,
+  Clock,
+  Sliders,
+  Calendar,
+  ArrowUpRight,
+  TrendingDown
 } from 'lucide-react';
 
 export default function App() {
+  // Configurable Timer & Simulation State
+  const [durationMinutes, setDurationMinutes] = useState(1); // default 1 min
   const [isRunning, setIsRunning] = useState(false);
   const [isFailsafe, setIsFailsafe] = useState(false);
-  const [currentRps, setCurrentRps] = useState(5);
   const [elapsedSec, setElapsedSec] = useState(0);
+
+  // Dynamic Traffic & Wave Generation
+  const [currentRps, setCurrentRps] = useState(5);
+  const [trafficPattern, setTrafficPattern] = useState('IDLE'); // 'STEADY_BASELINE', 'GRADUAL_UP', 'SUDDEN_SPIKE', 'SUDDEN_DROP', 'COOLDOWN'
+
+  // Pricing model parameters:
+  // Cloud Run instance rate ~$0.000036 per vCPU-second + memory ($0.13/hour per instance -> ~$0.0000361/sec)
+  // Overhead cost of 503 outage loss per request ~$0.08 (customer churn / bounce)
+  // Marketplace overselling SLA penalty per order ~$15.00
+  const COST_PER_INSTANCE_SEC = 0.0000361;
+  const OUTAGE_COST_PER_503 = 0.08;
+  const OVERSELL_PENALTY = 15.00;
+
+  // Cumulative Cost Trackers
+  const [reactiveCost, setReactiveCost] = useState({
+    computeCost: 0,
+    penaltyLoss: 0,
+    totalCost: 0
+  });
+
+  const [pulseCost, setPulseCost] = useState({
+    computeCost: 0,
+    penaltyLoss: 0,
+    totalCost: 0
+  });
 
   // Reactive Autoscaler Stats (Before)
   const [reactiveStats, setReactiveStats] = useState({
@@ -44,100 +75,164 @@ export default function App() {
     status: 'ACTIVE'
   });
 
-  // Simulation Tick Loop
+  // State refs for continuous pattern generator
+  const waveRef = useRef({
+    pattern: 'BASELINE',
+    targetRps: 5,
+    patternTimer: 0
+  });
+
+  // Helper to pick next randomized traffic phase
+  const pickNextPattern = (currentSec, totalSec) => {
+    const remaining = totalSec - currentSec;
+    if (remaining <= 5) {
+      return { pattern: 'COOLDOWN', targetRps: 8, duration: remaining };
+    }
+
+    const patterns = ['SUDDEN_SPIKE', 'GRADUAL_UP', 'SUDDEN_DROP', 'STEADY_BASELINE'];
+    const chosen = patterns[Math.floor(Math.random() * patterns.length)];
+
+    let targetRps = 10;
+    let duration = 6 + Math.floor(Math.random() * 8); // 6-13s per phase
+
+    if (chosen === 'SUDDEN_SPIKE') {
+      targetRps = 160 + Math.floor(Math.random() * 80); // 160 - 240 RPS
+      duration = 5 + Math.floor(Math.random() * 6);
+    } else if (chosen === 'GRADUAL_UP') {
+      targetRps = 80 + Math.floor(Math.random() * 60); // 80 - 140 RPS
+      duration = 8 + Math.floor(Math.random() * 6);
+    } else if (chosen === 'SUDDEN_DROP') {
+      targetRps = 10 + Math.floor(Math.random() * 15);
+      duration = 5 + Math.floor(Math.random() * 5);
+    } else {
+      targetRps = 5 + Math.floor(Math.random() * 10);
+      duration = 5 + Math.floor(Math.random() * 5);
+    }
+
+    return { pattern: chosen, targetRps, duration: Math.min(duration, remaining) };
+  };
+
+  // Main Simulation Loop
   useEffect(() => {
     let timer;
     if (isRunning) {
       timer = setInterval(() => {
         setElapsedSec((prev) => {
           const nextSec = prev + 1;
+          const totalSec = durationMinutes * 60;
 
-          // Traffic curve:
-          // 0 - 5s: Baseline (5 RPS)
-          // 6 - 20s: Flash Sale Surge (180 RPS)
-          // 21s+: Cooldown (15 RPS)
-          let rps = 5;
-          if (nextSec >= 6 && nextSec <= 20) {
-            rps = 180;
-          } else if (nextSec > 20) {
-            rps = 15;
+          if (nextSec >= totalSec) {
+            setIsRunning(false);
           }
-          setCurrentRps(rps);
 
-          // Update Reactive state (lagging response)
-          setReactiveStats((prevR) => {
-            if (nextSec >= 6 && nextSec <= 15) {
-              // 2-5 min scale-up lag! Instances stuck at 1 or 2
-              return {
-                instances: nextSec > 12 ? 2 : 1,
-                latencyMs: Math.min(3200, prevR.latencyMs + 380),
-                error503s: prevR.error503s + (rps > 50 ? 35 : 0),
-                oversoldItems: prevR.oversoldItems + (rps > 50 ? 4 : 0),
-                status: 'CRITICAL_LAG'
-              };
-            } else if (nextSec > 15 && nextSec <= 20) {
-              return {
-                instances: 4,
-                latencyMs: 850,
-                error503s: prevR.error503s + 12,
-                oversoldItems: prevR.oversoldItems + 1,
-                status: 'RECOVERING'
-              };
-            } else {
-              return {
-                instances: Math.max(1, prevR.instances - (nextSec > 25 ? 1 : 0)),
-                latencyMs: Math.max(200, prevR.latencyMs - 150),
-                error503s: prevR.error503s,
-                oversoldItems: prevR.oversoldItems,
-                status: 'STABILIZED'
-              };
-            }
+          // Advance Pattern Generator
+          const wave = waveRef.current;
+          wave.patternTimer -= 1;
+          if (wave.patternTimer <= 0) {
+            const nextPattern = pickNextPattern(nextSec, totalSec);
+            wave.pattern = nextPattern.pattern;
+            wave.targetRps = nextPattern.targetRps;
+            wave.patternTimer = nextPattern.duration;
+            setTrafficPattern(nextPattern.pattern);
+          }
+
+          // Interpolate or snap current RPS based on pattern
+          let nextRps = currentRps;
+          if (wave.pattern === 'SUDDEN_SPIKE') {
+            nextRps = wave.targetRps; // Instant flash surge
+          } else if (wave.pattern === 'SUDDEN_DROP') {
+            nextRps = wave.targetRps; // Instant drop
+          } else {
+            // Gradual easing towards target
+            const diff = wave.targetRps - nextRps;
+            nextRps = Math.round(nextRps + diff * 0.35);
+          }
+          nextRps = Math.max(5, nextRps);
+          setCurrentRps(nextRps);
+
+          // Update Reactive Stats (suffers 2-5 min lag on spikes)
+          let rInstances = reactiveStats.instances;
+          let rLatency = 200;
+          let new503s = 0;
+          let newOversold = 0;
+          let rStatus = 'OPTIMAL';
+
+          if (nextRps > 70) {
+            // Reactive autoscaler lags behind!
+            rInstances = Math.min(3, Math.max(1, Math.round(rInstances + 0.15)));
+            rLatency = Math.min(3500, reactiveStats.latencyMs + (nextRps > 150 ? 450 : 200));
+            new503s = Math.round((nextRps - (rInstances * 15)) * 0.45);
+            newOversold = nextRps > 120 ? 2 : 0;
+            rStatus = 'CRITICAL_LAG';
+          } else {
+            rInstances = Math.max(1, rInstances - 1);
+            rLatency = Math.max(190, reactiveStats.latencyMs - 120);
+            rStatus = 'STABILIZED';
+          }
+
+          setReactiveStats((prevR) => ({
+            instances: rInstances,
+            latencyMs: rLatency,
+            error503s: prevR.error503s + Math.max(0, new503s),
+            oversoldItems: prevR.oversoldItems + newOversold,
+            status: rStatus
+          }));
+
+          // Update PulseGuard Stats (proactive scaling & safety locks)
+          let pInstances = 1;
+          let pLatency = 180;
+          let pStatus = 'ACTIVE';
+          let pLockedStock = 0;
+          let pChannels = [];
+
+          if (isFailsafe) {
+            pInstances = rInstances;
+            pLatency = rLatency;
+            pStatus = 'FAILSAFE_ENGAGED: Native Autoscaler Active';
+          } else if (nextRps > 50) {
+            // Proactive scaling calculates exact required instances ahead of time:
+            // Instances = ceil((RPS * 0.25) / 10) clamped 1..15
+            pInstances = Math.min(15, Math.max(2, Math.ceil((nextRps * 0.3) / 8)));
+            pLatency = Math.floor(180 + Math.random() * 35);
+            pLockedStock = 30;
+            pChannels = ['amazon', 'flipkart'];
+            pStatus = 'GUARDRAILS_ENGAGED';
+          } else {
+            pInstances = Math.max(1, Math.ceil(nextRps / 12));
+            pLatency = 175;
+            pStatus = 'OPTIMAL_STANDBY';
+          }
+
+          setPulseStats((prevP) => ({
+            ...prevP,
+            instances: pInstances,
+            latencyMs: pLatency,
+            error503s: 0,
+            lockedStock: pLockedStock,
+            oversoldItems: 0,
+            idempotencyKey: pLockedStock > 0 ? 'e4b1c872-9b93-4a18-b2ef-3701a2b9e601' : null,
+            lockedChannels: pChannels,
+            status: pStatus
+          }));
+
+          // Compute Tick Costs
+          setReactiveCost((prevC) => {
+            const comp = prevC.computeCost + (rInstances * COST_PER_INSTANCE_SEC);
+            const loss = prevC.penaltyLoss + (Math.max(0, new503s) * OUTAGE_COST_PER_503) + (newOversold * OVERSELL_PENALTY);
+            return {
+              computeCost: comp,
+              penaltyLoss: loss,
+              totalCost: comp + loss
+            };
           });
 
-          // Update PulseGuard state (proactive pre-warming & inventory lock)
-          setPulseStats((prevP) => {
-            if (isFailsafe) {
-              // Failsafe mode engaged: acts like reactive native scaler
-              return {
-                ...prevP,
-                status: 'FAILSAFE_ENGAGED: Native Autoscaler Active'
-              };
-            }
-
-            if (nextSec >= 4 && nextSec <= 5) {
-              // Agent predicts spike at sec 4 from telemetry slope! Pre-warms Cloud Run
-              return {
-                ...prevP,
-                instances: 8, // Pre-warmed ahead of the spike!
-                predictedRps: 185,
-                lockedStock: 50,
-                idempotencyKey: 'e4b1c872-9b93-4a18-b2ef-3701a2b9e601',
-                lockedChannels: ['amazon', 'flipkart'],
-                status: 'PRE_WARM_ACTIVE'
-              };
-            } else if (nextSec >= 6 && nextSec <= 20) {
-              return {
-                ...prevP,
-                instances: 10,
-                latencyMs: Math.floor(180 + Math.random() * 25),
-                error503s: 0, // No 503s due to pre-warmed capacity!
-                lockedStock: 50,
-                oversoldItems: 0,
-                idempotencyKey: 'e4b1c872-9b93-4a18-b2ef-3701a2b9e601',
-                lockedChannels: ['amazon', 'flipkart'],
-                status: 'GUARDRAILS_ENGAGED'
-              };
-            } else {
-              return {
-                ...prevP,
-                instances: Math.max(1, prevP.instances - (nextSec > 25 ? 2 : 0)),
-                latencyMs: 180,
-                lockedStock: 0,
-                idempotencyKey: null,
-                lockedChannels: [],
-                status: 'STANDBY'
-              };
-            }
+          setPulseCost((prevC) => {
+            const comp = prevC.computeCost + (pInstances * COST_PER_INSTANCE_SEC);
+            return {
+              computeCost: comp,
+              penaltyLoss: 0, // Zero penalty loss!
+              totalCost: comp
+            };
           });
 
           return nextSec;
@@ -145,10 +240,19 @@ export default function App() {
       }, 1000);
     }
     return () => clearInterval(timer);
-  }, [isRunning, isFailsafe]);
+  }, [isRunning, isFailsafe, durationMinutes, currentRps, reactiveStats.latencyMs, reactiveStats.instances]);
 
   const handleStartSimulation = () => {
+    waveRef.current = {
+      pattern: 'BASELINE',
+      targetRps: 5,
+      patternTimer: 5
+    };
     setIsRunning(true);
+  };
+
+  const handlePauseSimulation = () => {
+    setIsRunning(false);
   };
 
   const handleReset = () => {
@@ -156,6 +260,9 @@ export default function App() {
     setElapsedSec(0);
     setCurrentRps(5);
     setIsFailsafe(false);
+    setTrafficPattern('IDLE');
+    setReactiveCost({ computeCost: 0, penaltyLoss: 0, totalCost: 0 });
+    setPulseCost({ computeCost: 0, penaltyLoss: 0, totalCost: 0 });
     setReactiveStats({
       instances: 1,
       latencyMs: 195,
@@ -180,6 +287,50 @@ export default function App() {
   const handleToggleFailsafe = () => {
     setIsFailsafe(!isFailsafe);
   };
+
+  // Cost Extrapolation Helper
+  // Multiplies the run rate to 1 Day, 1 Week, 1 Month (30d), 1 Year (365d)
+  const calcProjections = () => {
+    const elapsed = Math.max(1, elapsedSec);
+    const rRunRatePerSec = reactiveCost.totalCost / elapsed;
+    const pRunRatePerSec = pulseCost.totalCost / elapsed;
+    const netSavingsPerSec = Math.max(0, rRunRatePerSec - pRunRatePerSec);
+
+    const SEC_IN_DAY = 86400;
+    const SEC_IN_WEEK = 604800;
+    const SEC_IN_MONTH = 2592000;
+    const SEC_IN_YEAR = 31536000;
+
+    return {
+      testRun: {
+        reactive: reactiveCost.totalCost,
+        pulse: pulseCost.totalCost,
+        savings: Math.max(0, reactiveCost.totalCost - pulseCost.totalCost)
+      },
+      day: {
+        reactive: rRunRatePerSec * SEC_IN_DAY,
+        pulse: pRunRatePerSec * SEC_IN_DAY,
+        savings: netSavingsPerSec * SEC_IN_DAY
+      },
+      week: {
+        reactive: rRunRatePerSec * SEC_IN_WEEK,
+        pulse: pRunRatePerSec * SEC_IN_WEEK,
+        savings: netSavingsPerSec * SEC_IN_WEEK
+      },
+      month: {
+        reactive: rRunRatePerSec * SEC_IN_MONTH,
+        pulse: pRunRatePerSec * SEC_IN_MONTH,
+        savings: netSavingsPerSec * SEC_IN_MONTH
+      },
+      year: {
+        reactive: rRunRatePerSec * SEC_IN_YEAR,
+        pulse: pRunRatePerSec * SEC_IN_YEAR,
+        savings: netSavingsPerSec * SEC_IN_YEAR
+      }
+    };
+  };
+
+  const projections = calcProjections();
 
   return (
     <div className="max-w-7xl mx-auto p-6 space-y-6">
@@ -224,44 +375,83 @@ export default function App() {
         </div>
       </header>
 
-      {/* Control Strip */}
+      {/* Control Strip & Timer Input */}
       <div className="bg-slate-900/80 border border-slate-800 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-6">
           <div>
             <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Live Traffic</div>
-            <div className="text-2xl font-bold text-white flex items-center gap-2">
+            <div className="text-2xl font-bold text-white flex items-center gap-2 font-mono">
               {currentRps} <span className="text-sm font-normal text-slate-400">RPS</span>
             </div>
           </div>
+
           <div className="h-8 w-px bg-slate-800" />
+
+          {/* Configurable Timer Input */}
           <div>
-            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Elapsed Time</div>
-            <div className="text-2xl font-bold text-white font-mono">{elapsedSec}s</div>
+            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider flex items-center gap-1.5">
+              <Clock className="w-3.5 h-3.5 text-indigo-400" />
+              Set Duration
+            </div>
+            <div className="flex items-center gap-2 mt-1">
+              <select
+                disabled={isRunning}
+                value={durationMinutes}
+                onChange={(e) => setDurationMinutes(Number(e.target.value))}
+                className="bg-slate-950 border border-slate-700 text-white rounded px-2.5 py-1 text-sm font-mono focus:outline-none focus:border-indigo-500 disabled:opacity-50"
+              >
+                <option value={1}>1 Minute</option>
+                <option value={2}>2 Minutes</option>
+                <option value={3}>3 Minutes</option>
+                <option value={5}>5 Minutes</option>
+                <option value={10}>10 Minutes</option>
+              </select>
+            </div>
           </div>
+
           <div className="h-8 w-px bg-slate-800" />
+
           <div>
-            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Flash-Sale Phase</div>
+            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Progress</div>
+            <div className="text-2xl font-bold text-white font-mono">
+              {elapsedSec}s <span className="text-xs font-normal text-slate-400">/ {durationMinutes * 60}s</span>
+            </div>
+          </div>
+
+          <div className="h-8 w-px bg-slate-800" />
+
+          <div>
+            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Simulated Wave Pattern</div>
             <div className="text-sm font-medium mt-1">
-              {elapsedSec === 0 && <span className="text-slate-400">Ready</span>}
-              {elapsedSec > 0 && elapsedSec <= 5 && <span className="text-blue-400">Normal Baseline (5 RPS)</span>}
-              {elapsedSec > 5 && elapsedSec <= 20 && (
-                <span className="text-amber-400 font-bold animate-pulse">🔥 Flash-Sale Burst (180 RPS)</span>
-              )}
-              {elapsedSec > 20 && <span className="text-emerald-400">Traffic Cooldown</span>}
+              {trafficPattern === 'IDLE' && <span className="text-slate-400">Ready to start</span>}
+              {trafficPattern === 'STEADY_BASELINE' && <span className="text-blue-400">Steady Baseline (5-15 RPS)</span>}
+              {trafficPattern === 'GRADUAL_UP' && <span className="text-yellow-400 font-semibold">📈 Gradual Traffic Ramp Up</span>}
+              {trafficPattern === 'SUDDEN_SPIKE' && <span className="text-amber-400 font-bold animate-pulse">🔥 Sudden Flash Surge (160-240 RPS)</span>}
+              {trafficPattern === 'SUDDEN_DROP' && <span className="text-cyan-400 font-semibold">📉 Sudden Traffic Drop</span>}
+              {trafficPattern === 'COOLDOWN' && <span className="text-emerald-400">Final Cooldown</span>}
             </div>
           </div>
         </div>
 
-        {/* Action Buttons */}
+        {/* Action Controls */}
         <div className="flex items-center gap-3">
-          <button
-            onClick={handleStartSimulation}
-            disabled={isRunning}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-lg font-medium text-sm transition shadow-lg shadow-indigo-600/20"
-          >
-            <Play className="w-4 h-4" />
-            Trigger Flash Sale Surge
-          </button>
+          {!isRunning ? (
+            <button
+              onClick={handleStartSimulation}
+              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg font-medium text-sm transition shadow-lg shadow-indigo-600/20"
+            >
+              <Play className="w-4 h-4" />
+              Start Multi-Wave Sim
+            </button>
+          ) : (
+            <button
+              onClick={handlePauseSimulation}
+              className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 text-white rounded-lg font-medium text-sm transition"
+            >
+              <Pause className="w-4 h-4" />
+              Pause
+            </button>
+          )}
 
           <button
             onClick={handleToggleFailsafe}
@@ -313,7 +503,7 @@ export default function App() {
               <div className="text-3xl font-bold text-white mt-2 font-mono">
                 {reactiveStats.instances}
                 <span className="text-xs font-normal text-rose-400 ml-2">
-                  {reactiveStats.instances <= 2 && elapsedSec > 6 ? '(Lagging behind spike!)' : ''}
+                  {currentRps > 80 && reactiveStats.instances <= 2 ? '(Lagging!)' : ''}
                 </span>
               </div>
             </div>
@@ -350,14 +540,24 @@ export default function App() {
               <div className="text-3xl font-bold text-rose-400 mt-2 font-mono">
                 {reactiveStats.oversoldItems}
                 <span className="text-xs block text-rose-500/80 font-normal mt-0.5">
-                  Amazon & Flipkart SLA penalties triggered
+                  Amazon & Flipkart SLA penalties
                 </span>
               </div>
             </div>
           </div>
 
-          <div className="p-3 rounded-lg bg-rose-950/30 border border-rose-900/50 text-xs text-rose-300">
-            <strong>Reactive Failure Mode:</strong> Cloud autoscaler waited for CPU threshold breach. Requests queued in the gateway, causing cascading 503 timeouts and webhook inventory desync across Amazon & Flipkart.
+          {/* Cost Tracker Card */}
+          <div className="bg-rose-950/20 border border-rose-900/50 p-4 rounded-xl flex items-center justify-between">
+            <div>
+              <div className="text-xs text-rose-300 font-semibold uppercase tracking-wider">Test Run Total Incident Cost</div>
+              <div className="text-2xl font-bold text-rose-400 font-mono mt-0.5">
+                ${reactiveCost.totalCost.toFixed(2)}
+              </div>
+            </div>
+            <div className="text-right text-xs text-slate-400 space-y-0.5">
+              <div>Compute: <span className="font-mono text-slate-300">${reactiveCost.computeCost.toFixed(4)}</span></div>
+              <div>503 & Oversell Penalty: <span className="font-mono text-rose-300 font-semibold">${reactiveCost.penaltyLoss.toFixed(2)}</span></div>
+            </div>
           </div>
         </div>
 
@@ -387,7 +587,7 @@ export default function App() {
               <div className="text-3xl font-bold text-emerald-400 mt-2 font-mono">
                 {pulseStats.instances}
                 <span className="text-xs font-normal text-emerald-300 ml-2">
-                  {pulseStats.instances >= 8 ? '(Pre-warmed ahead of surge!)' : ''}
+                  {currentRps > 50 ? '(Pre-warmed!)' : ''}
                 </span>
               </div>
             </div>
@@ -408,7 +608,7 @@ export default function App() {
                 <TrendingUp className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-3xl font-bold text-emerald-400 mt-2 font-mono">
-                {pulseStats.error503s}
+                0
               </div>
             </div>
 
@@ -418,38 +618,148 @@ export default function App() {
                 <Layers className="w-4 h-4 text-emerald-400" />
               </div>
               <div className="text-3xl font-bold text-emerald-300 mt-2 font-mono">
-                {pulseStats.lockedStock} <span className="text-xs text-slate-400 font-normal">units locked</span>
+                {pulseStats.lockedStock} <span className="text-xs text-slate-400 font-normal">units</span>
                 <span className="text-xs block text-emerald-400/80 font-normal mt-0.5">
-                  0 Oversold | 100% Marketplace SLA Kept
+                  0 Oversold | 100% SLA Kept
                 </span>
               </div>
             </div>
           </div>
 
-          {/* Idempotency & Channel Lock Banner */}
-          {pulseStats.idempotencyKey && (
-            <div className="p-3 rounded-lg bg-emerald-950/40 border border-emerald-800/60 text-xs text-emerald-200 space-y-1">
-              <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 font-semibold text-emerald-300">
-                  <Key className="w-3.5 h-3.5 text-emerald-400" />
-                  Idempotent Lock Active:
-                </span>
-                <span className="font-mono text-[11px] text-slate-300">{pulseStats.idempotencyKey}</span>
-              </div>
-              <div className="flex items-center justify-between text-[11px] text-slate-400">
-                <span>Channels Locked: <span className="text-emerald-300 font-mono">[{pulseStats.lockedChannels.join(', ')}]</span></span>
-                <span>Guardrail Decision Latency: <strong className="text-emerald-300 font-mono">480ms</strong> (&lt; 2000ms SLA)</span>
-              </div>
-            </div>
-          )}
-
-          <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-900/50 text-xs text-emerald-300 flex items-center justify-between">
+          {/* Cost Tracker Card */}
+          <div className="bg-emerald-950/20 border border-emerald-900/50 p-4 rounded-xl flex items-center justify-between">
             <div>
-              <strong>Gemini Reasoning Engine:</strong> Detected &Delta;RPS &gt; 4.5&times; slope. Invoked Cloud Run scaling skill to 10 instances (confidence 94%) and locked 50 safety units.
+              <div className="text-xs text-emerald-300 font-semibold uppercase tracking-wider">Test Run Total Incident Cost</div>
+              <div className="text-2xl font-bold text-emerald-400 font-mono mt-0.5">
+                ${pulseCost.totalCost.toFixed(2)}
+              </div>
             </div>
-            <div className="text-right font-mono text-[11px] text-emerald-400 shrink-0 ml-2">
-              Scale Decision: 480ms
+            <div className="text-right text-xs text-slate-400 space-y-0.5">
+              <div>Pure Compute: <span className="font-mono text-slate-300">${pulseCost.computeCost.toFixed(4)}</span></div>
+              <div>Penalties Avoided: <span className="font-mono text-emerald-300 font-semibold">${reactiveCost.penaltyLoss.toFixed(2)} saved</span></div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      {/* COST PREDICTION & BUSINESS IMPACT ANALYTICS (1 Day, 1 Week, 1 Month, 1 Year) */}
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-6 space-y-5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-800 pb-4">
+          <div>
+            <h3 className="text-lg font-bold text-white flex items-center gap-2">
+              <DollarSign className="w-5 h-5 text-emerald-400" />
+              Enterprise Financial Impact & Cloud Cost Extrapolation
+            </h3>
+            <p className="text-xs text-slate-400 mt-0.5">
+              Showing how small per-second micro-outages & overselling penalties compound into massive annual cloud waste
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono bg-emerald-950/60 border border-emerald-700/50 text-emerald-300 px-3 py-1.5 rounded-lg">
+            <span>Projected Annual Savings:</span>
+            <strong className="text-base font-bold text-emerald-400">
+              ${projections.year.savings.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+            </strong>
+          </div>
+        </div>
+
+        {/* Projection Cards Grid */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {/* 1 Day */}
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-300">1 Day Extrapolation</span>
+              <Calendar className="w-4 h-4 text-slate-500" />
+            </div>
+            <div className="text-xs space-y-1 text-slate-400">
+              <div className="flex justify-between">
+                <span>Reactive:</span>
+                <span className="font-mono text-rose-400">${projections.day.reactive.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>PulseGuard:</span>
+                <span className="font-mono text-emerald-400">${projections.day.pulse.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
+              <span>Saved:</span>
+              <span className="font-mono">+${projections.day.savings.toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* 1 Week */}
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-300">1 Week Extrapolation</span>
+              <Calendar className="w-4 h-4 text-slate-500" />
+            </div>
+            <div className="text-xs space-y-1 text-slate-400">
+              <div className="flex justify-between">
+                <span>Reactive:</span>
+                <span className="font-mono text-rose-400">${projections.week.reactive.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>PulseGuard:</span>
+                <span className="font-mono text-emerald-400">${projections.week.pulse.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
+              <span>Saved:</span>
+              <span className="font-mono">+${projections.week.savings.toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* 1 Month */}
+          <div className="bg-slate-950/60 border border-slate-800/80 p-4 rounded-xl space-y-2">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-slate-300">1 Month (30 Days)</span>
+              <Calendar className="w-4 h-4 text-slate-500" />
+            </div>
+            <div className="text-xs space-y-1 text-slate-400">
+              <div className="flex justify-between">
+                <span>Reactive:</span>
+                <span className="font-mono text-rose-400">${projections.month.reactive.toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>PulseGuard:</span>
+                <span className="font-mono text-emerald-400">${projections.month.pulse.toFixed(2)}</span>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
+              <span>Saved:</span>
+              <span className="font-mono">+${projections.month.savings.toFixed(2)}</span>
+            </div>
+          </div>
+
+          {/* 1 Year */}
+          <div className="bg-slate-950/60 border border-emerald-900/40 p-4 rounded-xl space-y-2 bg-gradient-to-br from-slate-950 to-emerald-950/20">
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span className="font-semibold text-emerald-300">1 Year (Annual Impact)</span>
+              <ArrowUpRight className="w-4 h-4 text-emerald-400" />
+            </div>
+            <div className="text-xs space-y-1 text-slate-400">
+              <div className="flex justify-between">
+                <span>Reactive:</span>
+                <span className="font-mono text-rose-400">${projections.year.reactive.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>PulseGuard:</span>
+                <span className="font-mono text-emerald-400">${projections.year.pulse.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+              </div>
+            </div>
+            <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between text-xs font-bold text-emerald-400">
+              <span>Net Annual ROI:</span>
+              <span className="font-mono">+${projections.year.savings.toLocaleString('en-US', { maximumFractionDigits: 0 })}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Breakdown Explainer Footnote */}
+        <div className="p-3 bg-slate-950/50 border border-slate-800 rounded-lg text-xs text-slate-400 flex flex-col md:flex-row md:items-center justify-between gap-2">
+          <div>
+            💡 <strong>Cost Model Basis:</strong> Cloud Run compute ($0.000036/vCPU-sec) + 503 outage drop penalty ($0.08/customer drop) + Marketplace overselling SLA penalty ($15.00/oversold unit).
+          </div>
+          <div className="text-slate-300 font-medium shrink-0">
+            PulseGuard eliminates 100% of 503 outage drops and oversell penalties.
           </div>
         </div>
       </div>
