@@ -7,13 +7,13 @@ from typing import Dict, Any, Optional, List
 
 class InventoryStore:
     def __init__(self):
-        self.lock = asyncio.Lock()
+        self._lock: Optional[asyncio.Lock] = None
+        self._semaphore: Optional[asyncio.Semaphore] = None
         self.instance_id = os.environ.get("HOSTNAME", f"inst-{uuid.uuid4().hex[:6]}")
         
         # Simulated bottlenecks configurable via ENV
         self.processing_delay_ms = int(os.environ.get("CHECKOUT_DELAY_MS", "200"))
         self.max_concurrency = int(os.environ.get("MAX_CONCURRENCY", "10"))
-        self.concurrency_semaphore = asyncio.Semaphore(self.max_concurrency)
         
         self.current_active_requests = 0
         
@@ -30,6 +30,18 @@ class InventoryStore:
         self.locked_channels: set = set()
         
         self.reset()
+
+    @property
+    def lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    @property
+    def concurrency_semaphore(self) -> asyncio.Semaphore:
+        if self._semaphore is None:
+            self._semaphore = asyncio.Semaphore(self.max_concurrency)
+        return self._semaphore
 
     def reset(self):
         self.total_stock = self.default_total_stock
@@ -133,7 +145,7 @@ class InventoryStore:
             self.processing_delay_ms = delay_ms
         if max_concurrency is not None:
             self.max_concurrency = max_concurrency
-            self.concurrency_semaphore = asyncio.Semaphore(max_concurrency)
+            self._semaphore = asyncio.Semaphore(max_concurrency)
 
 # Global singleton store
 store = InventoryStore()

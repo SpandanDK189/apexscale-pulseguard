@@ -445,7 +445,7 @@ export default function App() {
 
           <div className="p-3 rounded-lg bg-emerald-950/30 border border-emerald-900/50 text-xs text-emerald-300 flex items-center justify-between">
             <div>
-              <strong>Gemini Reasoning Engine:</strong> Detected $\Delta\text{RPS} &gt; 4.5\times$ slope. Invoked Cloud Run scaling skill to 10 instances (confidence 94%) and locked 50 safety units.
+              <strong>Gemini Reasoning Engine:</strong> Detected &Delta;RPS &gt; 4.5&times; slope. Invoked Cloud Run scaling skill to 10 instances (confidence 94%) and locked 50 safety units.
             </div>
             <div className="text-right font-mono text-[11px] text-emerald-400 shrink-0 ml-2">
               Scale Decision: 480ms

@@ -1,6 +1,8 @@
 import time
 import uuid
 import asyncio
+from contextlib import asynccontextmanager
+from typing import Optional, List, Dict, Any
 from datetime import datetime
 from fastapi import FastAPI, HTTPException, status, Response, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,10 +19,18 @@ from app.models import (
 )
 from app.store import store
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: ensure clean state
+    store.reset()
+    yield
+    # Shutdown
+
 app = FastAPI(
     title="PulseGuard Target Store Service",
     description="Flash-Sale Checkout & Inventory Simulation API with Strict Concurrency Bounds, Idempotent Stock Locking, and Telemetry Headers",
-    version="1.1.0"
+    version="1.1.0",
+    lifespan=lifespan
 )
 
 # Enable CORS for local demo dashboard and cross-origin tools
@@ -33,18 +43,32 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-@app.middleware("http")
-async def add_telemetry_headers(request: Request, call_next):
-    start_time = time.perf_counter()
-    response = await call_next(request)
-    duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    
-    # Expose operational headers conforming to BigQuery telemetry schema
-    response.headers["X-PulseGuard-Instance"] = store.instance_id
-    response.headers["X-PulseGuard-Concurrency"] = str(store.current_active_requests)
-    response.headers["X-PulseGuard-Queue-Depth"] = str(max(0, store.current_active_requests - store.max_concurrency))
-    response.headers["X-PulseGuard-Latency-Ms"] = str(duration_ms)
-    return response
+# Pure ASGI Middleware for zero-overhead telemetry injection
+class TelemetryMiddleware:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        start_time = time.perf_counter()
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                headers = list(message.get("headers", []))
+                headers.append((b"x-pulseguard-instance", store.instance_id.encode()))
+                headers.append((b"x-pulseguard-concurrency", str(store.current_active_requests).encode()))
+                headers.append((b"x-pulseguard-queue-depth", str(max(0, store.current_active_requests - store.max_concurrency)).encode()))
+                headers.append((b"x-pulseguard-latency-ms", str(duration_ms).encode()))
+                message["headers"] = headers
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+# app.add_middleware(TelemetryMiddleware)
 
 @app.get("/health", tags=["Health"])
 async def health():
