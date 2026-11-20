@@ -43,7 +43,19 @@ app.add_middleware(
     expose_headers=["*"]
 )
 
-# Pure ASGI Middleware for zero-overhead telemetry injection
+import os
+import httpx
+
+TELEMETRY_URL = os.environ.get("TELEMETRY_INGEST_URL", "http://127.0.0.1:8080/telemetry/record")
+telemetry_client = httpx.AsyncClient(timeout=0.5)
+
+async def dispatch_telemetry(payload: dict):
+    try:
+        await telemetry_client.post(TELEMETRY_URL, json=payload)
+    except Exception:
+        pass  # Never block checkout flow if telemetry collector is unavailable
+
+# Pure ASGI Middleware for zero-overhead telemetry injection & async forwarding
 class TelemetryMiddleware:
     def __init__(self, app):
         self.app = app
@@ -54,9 +66,11 @@ class TelemetryMiddleware:
             return
 
         start_time = time.perf_counter()
+        status_holder = [200]
 
         async def send_wrapper(message):
             if message["type"] == "http.response.start":
+                status_holder[0] = message.get("status", 200)
                 duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
                 headers = list(message.get("headers", []))
                 headers.append((b"x-pulseguard-instance", store.instance_id.encode()))
@@ -66,9 +80,30 @@ class TelemetryMiddleware:
                 message["headers"] = headers
             await send(message)
 
-        await self.app(scope, receive, send_wrapper)
+        try:
+            await self.app(scope, receive, send_wrapper)
+        finally:
+            path = scope.get("path", "")
+            if not path.startswith("/health"):
+                duration_ms = round((time.perf_counter() - start_time) * 1000, 2)
+                channel = "d2c"
+                for h_k, h_v in scope.get("headers", []):
+                    if h_k.lower() == b"x-client-channel":
+                        channel = h_v.decode("utf-8", errors="ignore")
+                        break
 
-# app.add_middleware(TelemetryMiddleware)
+                payload = {
+                    "endpoint": path,
+                    "http_method": scope.get("method", "GET"),
+                    "status_code": status_holder[0],
+                    "latency_ms": duration_ms,
+                    "queue_depth": max(0, store.current_active_requests - store.max_concurrency),
+                    "active_instances": getattr(store, "allocated_instances", 1),
+                    "channel": channel
+                }
+                asyncio.create_task(dispatch_telemetry(payload))
+
+app.add_middleware(TelemetryMiddleware)
 
 @app.get("/health", tags=["Health"])
 async def health():
@@ -251,6 +286,21 @@ async def update_config(req: ConfigUpdateRequest):
         "max_concurrency": store.max_concurrency
     }
 
+@app.post("/api/scale", tags=["Scaling"])
+async def scale_instances(req: Dict[str, Any]):
+    """Called by PulseGuard agent to adjust allocated instances & concurrency in real time."""
+    target_instances = int(req.get("min_instances", req.get("recommended_min_instances", 1)))
+    store.allocated_instances = target_instances
+    store.max_concurrency = target_instances * 10
+    store._semaphore = asyncio.Semaphore(store.max_concurrency)
+    return {
+        "status": "SCALED",
+        "allocated_instances": store.allocated_instances,
+        "max_concurrency": store.max_concurrency,
+        "timestamp": datetime.utcnow().isoformat() + "Z"
+    }
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8080, reload=True)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run("app.main:app", host="0.0.0.0", port=port, reload=True)

@@ -1,0 +1,28 @@
+flowchart TD
+    subgraph Ingress ["1. Ingress & Traffic Routing"]
+        Client["Shoppers / Marketplace Webhooks"] --> GLB["Cloud Load Balancer / API Gateway"]
+    end
+
+    subgraph Compute ["2. Cloud Run Target Service"]
+        GLB --> StoreService["target-store-service<br/>Cloud Run: min=1, max=30"]
+        StoreService -.-> StoreTelemetry["ASGI Telemetry Filter"]
+    end
+
+    subgraph DataPlane ["3. Telemetry & Analytics Pipeline"]
+        StoreTelemetry --> PubSub["Cloud Pub/Sub: telemetry-topic"]
+        PubSub --> BigQueryStreamer["BigQuery Subscription"]
+        BigQueryStreamer --> BQ[("BigQuery: telemetry_events")]
+        PubSub --> Interceptor["telemetry-interceptor<br/>Cloud Run: In-Memory Sliding Window"]
+    end
+
+    subgraph AgentCore ["4. Autonomous Reasoning Engine"]
+        Interceptor -->|GET /telemetry/window| AgentDaemon["pulseguard-agent-core<br/>Cloud Run: CPU Always Allocated"]
+        AgentDaemon --> Gemini["Vertex AI / Gemini API"]
+    end
+
+    subgraph Actuation ["5. Actuation & Fail-Safe"]
+        AgentDaemon -->|PATCH minInstanceCount| CloudRunAPI["Cloud Run Admin API v2"]
+        CloudRunAPI ==> StoreService
+        AgentDaemon -->|POST /api/inventory/lock| StoreService
+        AgentDaemon -.->|2000ms Timeout Fallback| NativeAutoscaler["Native GCP Reactive Autoscaler"]
+    end
