@@ -458,28 +458,38 @@ export default function App() {
   const tourSteps = [
     {
       title: "Welcome to PulseGuard (Team ApexScale)",
-      content: "PulseGuard is an Autonomous Multi-Cloud Resilience & Inventory Guardrail Agent built with Gemini Omni, Google Cloud Run, and BigQuery. This tour will guide you on how to run a live flash-sale simulation and interpret the results.",
+      content: "PulseGuard is an Autonomous Multi-Cloud Resilience & Marketplace Inventory Guardrail Agent built with Gemini Omni, Google Cloud Run, and BigQuery. This tour walks you through the live controls, the BigQuery streaming pipeline, and the financial impact analytics.",
       highlight: null
     },
     {
-      title: "1. Control Bar & Duration Setup",
-      content: "Here you set the test duration (1 to 10 minutes) and start the simulation. The engine automatically alternates between steady baselines, gradual ramps, and sudden flash surges (up to 240 RPS) without needing page refreshes.",
+      title: "1. Traffic Waves & Duration Controls",
+      content: "Set your test duration (1 to 10 minutes). When you click 'Start Multi-Wave Sim', the engine simulates realistic traffic phases (steady baselines, organic ramps, and sudden flash-sale bursts up to 240 RPS) without requiring any manual page refreshes.",
       highlight: "controls"
     },
     {
-      title: "2. The 'BEFORE' Card: Reactive Autoscaling Failure",
-      content: "Standard autoscalers (AWS/GCP/Kubernetes) wait for CPU thresholds to breach, creating a 2-5 minute lag. Watch this card to observe cascading 503 errors, high latency (>3000ms), and Amazon/Flipkart inventory overselling.",
+      title: "2. Live BigQuery Ingestion: 15% Sample vs 100% Full",
+      content: "Watch the 'Traffic Volume & BQ Stream' counter. You can toggle between '15% Sample' (industry-standard head-based sampling that saves 85% in BigQuery streaming billing) and '100% Full' (1:1 stream where every request is recorded in BigQuery).",
+      highlight: "bigquery"
+    },
+    {
+      title: "3. The 'BEFORE' Card: Reactive Autoscaling Failure",
+      content: "Traditional cloud autoscalers wait for CPU thresholds (e.g. 80%) to breach, creating a 2-5 minute lag. Watch this card to observe cascading 503 errors, high latency (>2600ms), and Amazon/Flipkart inventory overselling penalties.",
       highlight: "reactive"
     },
     {
-      title: "3. The 'AFTER' Card: PulseGuard Proactive Agent",
-      content: "PulseGuard correlates real-time API telemetry slopes via Gemini Omni to proactively scale Cloud Run instances BEFORE traffic hits, while locking safety-stock buffers across marketplace APIs with idempotent keys.",
+      title: "4. The 'AFTER' Card: PulseGuard Proactive Agent",
+      content: "PulseGuard correlates real-time API telemetry slopes via Gemini Omni to proactively scale Cloud Run instances BEFORE traffic arrives, while locking safety-stock buffers across marketplace APIs with idempotent UUIDv4 keys (0 crashes, ~175ms latency).",
       highlight: "pulseguard"
     },
     {
-      title: "4. Enterprise Financials & CSP Loss Breakdown",
-      content: "See the real-time cost breakdown across Pure Cloud Compute, Merchant Platform Losses (503 churn + oversell penalties), and Cloud Service Provider (CSP) Outage Losses extrapolated to 1 Day, 1 Week, 1 Month, and 1 Year.",
+      title: "5. 3-Tier Enterprise Financials & CSP Loss Breakdown",
+      content: "Inspect the financial breakdown separating Pure Cloud Compute ($0.000036/sec), E-Commerce Platform Losses (503 churn + $15 oversell penalties), and Cloud Service Provider (CSP) Outage Losses (SRE triage + SLA refund credits) extrapolated across 1 Day, 1 Week, 1 Month, and 1 Year.",
       highlight: "financials"
+    },
+    {
+      title: "6. 2000ms Watchdog Circuit Breaker (Fail-Safe)",
+      content: "Click 'Test 2000ms Watchdog' anytime to simulate an agent timeout. The system demonstrates our hard deterministic safety guardrail: control instantly falls back to native cloud autoscaling with zero downtime.",
+      highlight: "failsafe"
     }
   ];
 
