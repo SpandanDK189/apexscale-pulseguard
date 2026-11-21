@@ -1,0 +1,17 @@
+flowchart LR
+    Start["1. Incoming Flash-Sale Traffic<br/>D2C, Amazon, Flipkart, Myntra, ONDC<br/>(5 RPS Baseline -> 180-240 RPS Surge)"] --> Store["2. Target Store Service & ASGI Filter<br/>POST /api/checkout (~200ms, max 10 conc)<br/>Async Non-Blocking Telemetry Capture"]
+
+    Store -->|POST /telemetry/record| Hot["3A. Hot Path (<0.5ms RAM)<br/>15s Sliding Window<br/>ΔRPS, P50/P95, Latency Slope"]
+    Store -.->|Async Batch 15% / 100%| Cold[("3B. Cold Path (BigQuery)<br/>pulseguard_telemetry.telemetry_events<br/>Historical Baselines")]
+
+    Hot -->|GET /telemetry/window| Agent["4. Gemini Omni + Agent Skills (MCP)<br/>• proactive-scaler<br/>• telemetry-inventory-guard"]
+    Cold -.->|Historical Context| Agent
+
+    Agent --> Watchdog{"5. 2000ms Watchdog &<br/>Deterministic Guardrails"}
+
+    Watchdog -->|"<= 2000ms & Conf >= 0.85<br/>(Surge Detected)"| UC1["USE CASE 1: Proactive Defense<br/>• PATCH minInstanceCount [1..15]<br/>• POST /api/inventory/lock (UUIDv4)<br/>Result: 0 Crashes, 0 Oversold"]
+    Watchdog -->|"<= 2000ms & Conf < 0.85<br/>(Baseline / Cooldown)"| UC2["USE CASE 2: Optimal Hold<br/>• 10s Cooldown Hysteresis<br/>• Maintain Current Allocation<br/>Result: Zero Idle Waste"]
+    Watchdog -->|"> 2000ms Timeout or Error<br/>(Circuit Breaker Tripped)"| UC3["USE CASE 3: Fail-Safe Active<br/>• FAILSAFE_ENGAGED:<br/>  Native GCP Autoscaler Active<br/>Result: Zero Checkout Blocking"]
+
+    UC1 ==>|Pre-Warm & Stock Lock| Store
+    UC1 & UC2 & UC3 --> Ops["6. Ops & Demo Dashboard<br/>Live Multi-Wave Sim • 3-Tier ROI (1d-1y)"]
