@@ -26,7 +26,8 @@ import {
   ChevronRight,
   ChevronLeft,
   Sparkles,
-  Info
+  Info,
+  CheckCircle2
 } from 'lucide-react';
 
 export default function App() {
