@@ -37,6 +37,10 @@ export default function App() {
   const [isFailsafe, setIsFailsafe] = useState(false);
   const [elapsedSec, setElapsedSec] = useState(0);
 
+  // Total Traffic & BigQuery Stream Trackers
+  const [totalSimulatedRequests, setTotalSimulatedRequests] = useState(0);
+  const [streamedToBigQuery, setStreamedToBigQuery] = useState(0);
+
   // Dynamic Traffic & Wave Generation
   const [currentRps, setCurrentRps] = useState(5);
   const [trafficPattern, setTrafficPattern] = useState('IDLE'); // 'STEADY_BASELINE', 'GRADUAL_UP', 'SUDDEN_SPIKE', 'SUDDEN_DROP', 'COOLDOWN'
@@ -98,9 +102,13 @@ export default function App() {
   // Background dispatcher to live BigQuery via Go Telemetry Interceptor (:8080)
   const dispatchLiveTelemetry = async (rps, pattern, instances) => {
     try {
-      // Send a representative sample per tick into live BigQuery
-      const sampleCount = Math.min(10, Math.max(1, Math.round(rps / 10)));
+      // In production high-concurrency systems (like Cloudflare/Datadog), streaming every single
+      // microsecond request to a DB burns bandwidth. We stream a representative sample rate (~15-20% of traffic)
+      // or at lower RPS we stream 1:1.
+      const sampleCount = Math.max(1, Math.min(25, Math.round(rps * 0.15)));
       const channels = ['amazon', 'flipkart', 'myntra', 'ondc', 'd2c'];
+
+      setStreamedToBigQuery((prev) => prev + sampleCount);
 
       for (let i = 0; i < sampleCount; i++) {
         const channel = channels[Math.floor(Math.random() * channels.length)];
@@ -109,7 +117,7 @@ export default function App() {
           ? (rps > 80 ? (350 + Math.random() * 400) : (120 + Math.random() * 60))
           : (40 + Math.random() * 40);
 
-        fetch('http://localhost:8080/telemetry/record', {
+        fetch('http://127.0.0.1:8080/telemetry/record', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -226,6 +234,7 @@ export default function App() {
           }
           nextRps = Math.max(5, nextRps);
           setCurrentRps(nextRps);
+          setTotalSimulatedRequests((prev) => prev + nextRps);
 
           // Update Reactive Stats (suffers 2-5 min lag on spikes)
           let rInstances = reactiveStats.instances;
@@ -352,6 +361,8 @@ export default function App() {
     setShowCompletionDebrief(false);
     setElapsedSec(0);
     setCurrentRps(5);
+    setTotalSimulatedRequests(0);
+    setStreamedToBigQuery(0);
     setIsFailsafe(false);
     setTrafficPattern('IDLE');
     setReactiveFinancials({ computeCost: 0, ecomLoss: 0, cspLoss: 0, totalLoss: 0 });
@@ -694,6 +705,22 @@ export default function App() {
             <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider">Progress</div>
             <div className="text-2xl font-bold text-white font-mono">
               {elapsedSec}s <span className="text-xs font-normal text-slate-400">/ {durationMinutes * 60}s</span>
+            </div>
+          </div>
+
+          <div className="h-8 w-px bg-slate-800" />
+
+          {/* Total Requests & BigQuery Metric */}
+          <div>
+            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider flex items-center gap-1.5">
+              <Activity className="w-3.5 h-3.5 text-emerald-400" />
+              Total Traffic Volume
+            </div>
+            <div className="text-2xl font-bold text-white font-mono flex items-center gap-2">
+              {totalSimulatedRequests.toLocaleString()}
+              <span className="text-xs font-normal text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2 py-0.5 rounded">
+                {streamedToBigQuery.toLocaleString()} in BQ
+              </span>
             </div>
           </div>
 
