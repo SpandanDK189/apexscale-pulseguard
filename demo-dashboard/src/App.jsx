@@ -95,6 +95,39 @@ export default function App() {
     totalLoss: 0
   });
 
+  // Background dispatcher to live BigQuery via Go Telemetry Interceptor (:8080)
+  const dispatchLiveTelemetry = async (rps, pattern, instances) => {
+    try {
+      // Send a representative sample per tick into live BigQuery
+      const sampleCount = Math.min(10, Math.max(1, Math.round(rps / 10)));
+      const channels = ['amazon', 'flipkart', 'myntra', 'ondc', 'd2c'];
+
+      for (let i = 0; i < sampleCount; i++) {
+        const channel = channels[Math.floor(Math.random() * channels.length)];
+        const isCheckout = Math.random() < 0.8;
+        const latency = isCheckout
+          ? (rps > 80 ? (350 + Math.random() * 400) : (120 + Math.random() * 60))
+          : (40 + Math.random() * 40);
+
+        fetch('http://localhost:8080/telemetry/record', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            endpoint: isCheckout ? '/api/checkout' : '/api/products',
+            http_method: isCheckout ? 'POST' : 'GET',
+            status_code: 200,
+            latency_ms: Math.round(latency * 10) / 10,
+            queue_depth: Math.round(latency / 50),
+            active_instances: instances,
+            channel: channel
+          })
+        }).catch(() => {}); // non-blocking fire-and-forget
+      }
+    } catch (e) {
+      // Ignored if local Go interceptor is offline
+    }
+  };
+
   // Reactive Autoscaler Stats (Before)
   const [reactiveStats, setReactiveStats] = useState({
     instances: 1,
@@ -260,6 +293,9 @@ export default function App() {
             lockedChannels: pChannels,
             status: pStatus
           }));
+
+          // Dispatch live records to BigQuery via Go Interceptor
+          dispatchLiveTelemetry(nextRps, wave.pattern, pInstances);
 
           // Compute Granular Financials (Compute + E-Com + CSP Losses)
           setReactiveFinancials((prevF) => {
