@@ -1,0 +1,47 @@
+version: '3.8'
+
+services:
+  target-store:
+    build:
+      context: ./target-store-service
+    ports:
+      - "8000:8080"
+    environment:
+      - PORT=8080
+      - TELEMETRY_INTERCEPTOR_URL=http://telemetry-interceptor:8080
+
+  telemetry-interceptor:
+    build:
+      context: ./telemetry-interceptor
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - WINDOW_SECONDS=15
+      - GCP_PROJECT_ID=pulseguard-apexscale
+      - BIGQUERY_DATASET=pulseguard_telemetry
+      - BIGQUERY_TABLE=telemetry_events
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
+    volumes:
+      - ./gcp-key.json:/app/gcp-key.json:ro
+
+  agent-core:
+    build:
+      context: ./agent-core
+    environment:
+      - TELEMETRY_URL=http://telemetry-interceptor:8080/telemetry/window
+      - STORE_URL=http://target-store:8080
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/gcp-key.json
+    volumes:
+      - ./gcp-key.json:/app/gcp-key.json:ro
+    depends_on:
+      - telemetry-interceptor
+      - target-store
+
+  demo-dashboard:
+    build:
+      context: ./demo-dashboard
+    ports:
+      - "3000:80"
+    depends_on:
+      - telemetry-interceptor
