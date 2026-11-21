@@ -1,28 +1,34 @@
-flowchart TD
-    subgraph Ingress ["1. Ingress & Traffic Routing"]
-        Client["Shoppers / Marketplace Webhooks"] --> GLB["Cloud Load Balancer / API Gateway"]
+flowchart LR
+    subgraph Ingress["1. Ingress & Edge Routing"]
+        Clients["Shoppers & Channels<br/>(D2C, Amazon, Flipkart, Myntra, ONDC)"] --> GCLB["Google Cloud Load Balancer<br/>+ Cloud API Gateway"]
     end
 
-    subgraph Compute ["2. Cloud Run Target Service"]
-        GLB --> StoreService["target-store-service<br/>Cloud Run: min=1, max=30"]
-        StoreService -.-> StoreTelemetry["ASGI Telemetry Filter"]
+    subgraph TargetCompute["2. Route-Targeted Microservices (Cloud Run)"]
+        GCLB --> StoreCheckout["Checkout Service (/api/checkout)<br/>Cloud Run: min=1..15, max=30"]
+        GCLB --> StoreCatalog["Catalog Service (/api/products)<br/>Independent Scaling Pool"]
+        StoreCheckout -.->|Async Non-Blocking| Filter["Telemetry Middleware<br/>(Latency, Queue Depth, Channel)"]
+        Dashboard["Demo & Ops Dashboard<br/>(React UI + 15%/100% Toggle)"] -.->|POST /telemetry/record| Interceptor
     end
 
-    subgraph DataPlane ["3. Telemetry & Analytics Pipeline"]
-        StoreTelemetry --> PubSub["Cloud Pub/Sub: telemetry-topic"]
-        PubSub --> BigQueryStreamer["BigQuery Subscription"]
-        BigQueryStreamer --> BQ[("BigQuery: telemetry_events")]
-        PubSub --> Interceptor["telemetry-interceptor<br/>Cloud Run: In-Memory Sliding Window"]
+    subgraph TelemetryPlane["3. Dual-Path Telemetry Engine (Go / Cloud Run)"]
+        Filter -->|POST /telemetry/record| Interceptor["telemetry-interceptor (Go)<br/>Sub-ms Ingress Buffer"]
+        Interceptor --> HotPath["HOT PATH (<0.5ms RAM)<br/>15s Sliding Window<br/>ΔRPS & P95 Latency Slope"]
+        Interceptor -->|Async Batch| ColdPath["COLD PATH (Cloud Pub/Sub)<br/>Streaming Ingestion"]
+        ColdPath --> BigQuery[("BigQuery Analytical Store<br/>pulseguard_telemetry.telemetry_events")]
     end
 
-    subgraph AgentCore ["4. Autonomous Reasoning Engine"]
-        Interceptor -->|GET /telemetry/window| AgentDaemon["pulseguard-agent-core<br/>Cloud Run: CPU Always Allocated"]
-        AgentDaemon --> Gemini["Vertex AI / Gemini API"]
+    subgraph AgentCore["4. Agentic Reasoning Core (Vertex AI)"]
+        HotPath -->|GET /telemetry/window| Agent["pulseguard-agent-core<br/>Gemini Omni + Gemini API"]
+        BigQuery -.->|Historical Baselines &<br/>Campaign Correlation| Agent
+        Skills["Google Agent Skills (MCP)<br/>• proactive-scaler<br/>• telemetry-inventory-guard"] --- Agent
+        Agent --> Gate{"Guardrails Gate<br/>Confidence >= 0.85<br/>Watchdog <= 2000ms"}
     end
 
-    subgraph Actuation ["5. Actuation & Fail-Safe"]
-        AgentDaemon -->|PATCH minInstanceCount| CloudRunAPI["Cloud Run Admin API v2"]
-        CloudRunAPI ==> StoreService
-        AgentDaemon -->|POST /api/inventory/lock| StoreService
-        AgentDaemon -.->|2000ms Timeout Fallback| NativeAutoscaler["Native GCP Reactive Autoscaler"]
+    subgraph Actuation["5. Deterministic Actuation & Fail-Safe"]
+        Gate -->|Pass <= 2000ms| CloudRunAPI["Cloud Run Admin API v2<br/>PATCH minInstanceCount (1..15)"]
+        Gate -->|Pass <= 2000ms| StockLock["Idempotent Inventory Guard<br/>POST /api/inventory/lock (UUIDv4)"]
+        Gate -->|Timeout > 2000ms / Err| Failsafe["FAILSAFE_ENGAGED<br/>Native GCP Autoscaler Active"]
+        CloudRunAPI ==>|Pre-Warms Target Service| StoreCheckout
+        StockLock ==>|Locks Safety Stock| StoreCheckout
+        Failsafe -.->|Reactive Fallback| StoreCheckout
     end
