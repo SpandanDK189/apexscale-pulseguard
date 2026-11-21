@@ -3,7 +3,6 @@ FROM golang:1.24-alpine AS builder
 
 WORKDIR /app
 COPY go.mod ./
-# If go.sum exists, copy it
 COPY go.* ./
 COPY . .
 
@@ -14,8 +13,9 @@ RUN apk --no-cache add ca-certificates
 
 WORKDIR /root/
 COPY --from=builder /app/interceptor .
+COPY start.sh .
+RUN chmod +x start.sh
 
 EXPOSE 8080
-ENV PORT=8080
 
-CMD ["./interceptor"]
+CMD ["sh", "start.sh"]
