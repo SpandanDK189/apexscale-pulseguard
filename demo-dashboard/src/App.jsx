@@ -40,6 +40,7 @@ export default function App() {
   // Total Traffic & BigQuery Stream Trackers
   const [totalSimulatedRequests, setTotalSimulatedRequests] = useState(0);
   const [streamedToBigQuery, setStreamedToBigQuery] = useState(0);
+  const [samplingMode, setSamplingMode] = useState('15%'); // '15%' (Production Sampling) or '100%' (Full Ingestion)
 
   // Dynamic Traffic & Wave Generation
   const [currentRps, setCurrentRps] = useState(5);
@@ -102,12 +103,15 @@ export default function App() {
   // Background dispatcher to live BigQuery via Go Telemetry Interceptor (:8080)
   const dispatchLiveTelemetry = async (rps, pattern, instances) => {
     try {
-      // In production high-concurrency systems (like Cloudflare/Datadog), streaming every single
-      // microsecond request to a DB burns bandwidth. We stream a representative sample rate (~15-20% of traffic)
-      // or at lower RPS we stream 1:1.
-      const sampleCount = Math.max(1, Math.min(25, Math.round(rps * 0.15)));
-      const channels = ['amazon', 'flipkart', 'myntra', 'ondc', 'd2c'];
+      // Configurable Ingestion:
+      // - '15%': Production Head-Based Sampling (saves 85% BigQuery costs while preserving P95/RPS accuracy)
+      // - '100%': 1:1 Ingestion (streams all traffic into BigQuery)
+      let sampleCount = rps;
+      if (samplingMode === '15%') {
+        sampleCount = Math.max(1, Math.min(30, Math.round(rps * 0.15)));
+      }
 
+      const channels = ['amazon', 'flipkart', 'myntra', 'ondc', 'd2c'];
       setStreamedToBigQuery((prev) => prev + sampleCount);
 
       for (let i = 0; i < sampleCount; i++) {
@@ -710,16 +714,45 @@ export default function App() {
 
           <div className="h-8 w-px bg-slate-800" />
 
-          {/* Total Requests & BigQuery Metric */}
+          {/* Total Requests & BigQuery Ingestion Mode Metric */}
           <div>
-            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider flex items-center gap-1.5">
-              <Activity className="w-3.5 h-3.5 text-emerald-400" />
-              Total Traffic Volume
+            <div className="text-xs uppercase text-slate-400 font-semibold tracking-wider flex items-center justify-between gap-1.5">
+              <span className="flex items-center gap-1">
+                <Activity className="w-3.5 h-3.5 text-emerald-400" />
+                Traffic Volume & BQ Stream
+              </span>
+              {/* Toggle 15% vs 100% Ingestion */}
+              <div className="flex items-center bg-slate-950 border border-slate-700 rounded p-0.5 text-[10px] font-mono">
+                <button
+                  disabled={isRunning}
+                  onClick={() => setSamplingMode('15%')}
+                  className={`px-1.5 py-0.5 rounded transition ${
+                    samplingMode === '15%'
+                      ? 'bg-indigo-600 text-white font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="15% Statistical Head-Based Sampling (Cuts BigQuery streaming costs by 85%)"
+                >
+                  15% Sample
+                </button>
+                <button
+                  disabled={isRunning}
+                  onClick={() => setSamplingMode('100%')}
+                  className={`px-1.5 py-0.5 rounded transition ${
+                    samplingMode === '100%'
+                      ? 'bg-emerald-600 text-white font-bold'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                  title="100% 1:1 Ingestion (Every simulated request streamed to BigQuery)"
+                >
+                  100% Full
+                </button>
+              </div>
             </div>
-            <div className="text-2xl font-bold text-white font-mono flex items-center gap-2">
+            <div className="text-2xl font-bold text-white font-mono flex items-center gap-2 mt-1">
               {totalSimulatedRequests.toLocaleString()}
               <span className="text-xs font-normal text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2 py-0.5 rounded">
-                {streamedToBigQuery.toLocaleString()} in BQ
+                {streamedToBigQuery.toLocaleString()} in BQ ({samplingMode})
               </span>
             </div>
           </div>
